@@ -67,6 +67,28 @@ fn get_localized_string(key: &str, lang_id: i32) -> &'static str {
         ("current_language", 9) => "当前语言",
         ("current_language", 10) => "当前语言",
         ("current_language", 11) => "현재 언어",
+        ("confirm_yes", 0) => "はい",
+        ("confirm_yes", 1) => "Yes",
+        ("confirm_yes", 3) => "Sí",
+        ("confirm_yes", 4) => "Yes",
+        ("confirm_yes", 5) => "Oui",
+        ("confirm_yes", 6) => "Sí",
+        ("confirm_yes", 7) => "Ja",
+        ("confirm_yes", 8) => "SÌ",
+        ("confirm_yes", 9) => "是的",
+        ("confirm_yes", 10) => "是的",
+        ("confirm_yes", 11) => "예",
+        ("confirm_no", 0) => "いいえ",
+        ("confirm_no", 1) => "No",
+        ("confirm_no", 3) => "No",
+        ("confirm_no", 4) => "No",
+        ("confirm_no", 5) => "Non",
+        ("confirm_no", 6) => "No",
+        ("confirm_no", 7) => "Nein",
+        ("confirm_no", 8) => "No",
+        ("confirm_no", 9) => "不",
+        ("confirm_no", 10) => "不",
+        ("confirm_no", 11) => "아니요",
         _ => "Unspecified",
     }
 }
@@ -121,6 +143,13 @@ impl ConfigBasicMenuItemSwitchMethods for LanguageSettings {
     }
 }
 
+thread_local! {
+    static CURRENT_MENU_ITEM: RefCell<Option<*mut ConfigBasicMenuItem>> = RefCell::new(None);
+}
+
+
+struct LanguageConfirmation;
+
 //confirm the language change when the A button is pressed
 extern "C" fn a_button_confirm(this: &mut ConfigBasicMenuItem, _method_info: Option<&'static MethodInfo>) -> BasicMenuResult {
     unsafe {
@@ -132,19 +161,13 @@ extern "C" fn a_button_confirm(this: &mut ConfigBasicMenuItem, _method_info: Opt
             YesNoDialog::bind::<LanguageConfirmation>(
             this.menu,  
             get_localized_string("change_language_confirm", CURRENT_LANG),
-            "Yes",
-            "No" 
+            get_localized_string("confirm_yes", CURRENT_LANG),
+            get_localized_string("confirm_no", CURRENT_LANG)
             );
         }
     BasicMenuResult::se_cursor()
     }  
 }
-
-thread_local! {
-    static CURRENT_MENU_ITEM: RefCell<Option<*mut ConfigBasicMenuItem>> = RefCell::new(None);
-}
-
-struct LanguageConfirmation;
 
 impl TwoChoiceDialogMethods for LanguageConfirmation {
     extern "C" fn on_first_choice(_this: &mut BasicDialogItemYes, _method_info: OptionalMethod) -> BasicMenuResult {
@@ -155,7 +178,7 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
             reload_messages();
             CURRENT_MENU_ITEM.with(|item| {
                 if let Some(menu_item) = *item.borrow() {
-                    update_texts(&mut *menu_item); // Mise à jour des textes de l'interface utilisateur
+                    update_texts(&mut *menu_item);
                 }
             });
         }

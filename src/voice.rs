@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use unity::prelude::*;
+use std::cell::RefCell;
 use engage::menu::{config::{ConfigBasicMenuItem, ConfigBasicMenuItemSwitchMethods}, BasicMenuResult};
+use engage::dialog::yesno::{BasicDialogItemYes, YesNoDialog, TwoChoiceDialogMethods};
 use crate::interface::{reload_messages, get_current_voice, set_voice, reflect_voice_setting};
 use crate::language::CURRENT_LANG;
 
@@ -46,6 +48,28 @@ fn get_localized_string(key: &str, lang_id: i32) -> &'static str {
         ("current_voice", 9) => "目前語音",
         ("current_voice", 10) => "当前语音",
         ("current_voice", 11) => "현재 음성",
+        ("confirm_yes", 0) => "はい",
+        ("confirm_yes", 1) => "Yes",
+        ("confirm_yes", 3) => "Sí",
+        ("confirm_yes", 4) => "Yes",
+        ("confirm_yes", 5) => "Oui",
+        ("confirm_yes", 6) => "Sí",
+        ("confirm_yes", 7) => "Ja",
+        ("confirm_yes", 8) => "SÌ",
+        ("confirm_yes", 9) => "是的",
+        ("confirm_yes", 10) => "是的",
+        ("confirm_yes", 11) => "예",
+        ("confirm_no", 0) => "いいえ",
+        ("confirm_no", 1) => "No",
+        ("confirm_no", 3) => "No",
+        ("confirm_no", 4) => "No",
+        ("confirm_no", 5) => "Non",
+        ("confirm_no", 6) => "No",
+        ("confirm_no", 7) => "Nein",
+        ("confirm_no", 8) => "No",
+        ("confirm_no", 9) => "不",
+        ("confirm_no", 10) => "不",
+        ("confirm_no", 11) => "아니요",
         _ => "Unspecified",
     }
 }
@@ -95,18 +119,47 @@ impl ConfigBasicMenuItemSwitchMethods for VoiceSettings {
     }
 }
 
+thread_local! {
+    static CURRENT_MENU_ITEM: RefCell<Option<*mut ConfigBasicMenuItem>> = RefCell::new(None);
+}
+
+struct VoiceConfirmation;
+
 //confirm the voice change when the A button is pressed
 extern "C" fn a_button_confirm(this: &mut ConfigBasicMenuItem, _method_info: Option<&'static MethodInfo>) -> BasicMenuResult {
     unsafe {
+        CURRENT_MENU_ITEM.with(|item| {
+            *item.borrow_mut() = Some(this as *mut _);
+        });
         if PREVIEW_VOICE != CURRENT_VOICE {
+            BasicMenuResult::se_cursor();
+            YesNoDialog::bind::<VoiceConfirmation>(
+            this.menu,  
+            get_localized_string("change_voice_confirm", CURRENT_LANG),
+            get_localized_string("confirm_yes", CURRENT_LANG),
+            get_localized_string("confirm_no", CURRENT_LANG)
+            );
+        }
+        BasicMenuResult::se_cursor()
+    }
+}
+
+impl TwoChoiceDialogMethods for VoiceConfirmation {
+    extern "C" fn on_first_choice(_this: &mut BasicDialogItemYes, _method_info: OptionalMethod) -> BasicMenuResult {
+        unsafe {
             set_voice(PREVIEW_VOICE);
             CURRENT_VOICE = PREVIEW_VOICE;
             reflect_voice_setting();
             reload_messages();
-            update_texts(this);
+            CURRENT_MENU_ITEM.with(|item| {
+                if let Some(menu_item) = *item.borrow() {
+                    update_texts(&mut *menu_item);
+                }
+            });
         }
-        BasicMenuResult::se_cursor()
+        BasicMenuResult::new().with_close_this(true)
     }
+
 }
 
 //update the preview text based on the selected voice
