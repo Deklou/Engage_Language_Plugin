@@ -192,29 +192,24 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
 // This deliberately does not walk parent menus or recreate menus while
 // a confirmation dialog is closing.
 fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
-    // Update our own entry before borrowing the menu's item list.
-    // Never obtain a second mutable reference to this same item through the list.
+    // The player's new language is already applied and the message files reloaded.
+    // Refresh our custom menu entry, then reinitialize other config items.
     update_texts(current_item);
-
     let current_ptr = current_item as *const ConfigBasicMenuItem;
 
-    // ConfigBasicMenuItem::menu is already an &mut BasicMenu.
-    // Reborrow it directly instead of casting &BasicMenu to &mut BasicMenu.
+    // Each game setting subclass overrides InitContent (vtable slot 27).
+    // Unlike UpdateText, this also rebuilds m_TitleText from current messages.
     for entry in current_item.menu.full_menu_item_list.iter_mut() {
         let entry: &mut ConfigBasicMenuItem = &mut **entry;
         if std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
             continue;
         }
 
-        // Recompute cached localized command/help fields using the game's
-        // existing virtual methods; then refresh the visible menu item.
         unsafe {
-            for name in ["SetCommandText", "SetHelpText"] {
-                if let Some(method) = entry.get_class().get_virtual_method(name) {
-                    let call: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
-                        std::mem::transmute(method.method_info.method_ptr);
-                    call(entry, method.method_info);
-                }
+            if let Some(method) = entry.get_class().get_virtual_method("InitContent") {
+                let init: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
+                    std::mem::transmute(method.method_info.method_ptr);
+                init(entry, method.method_info);
             }
         }
         entry.update_text();
