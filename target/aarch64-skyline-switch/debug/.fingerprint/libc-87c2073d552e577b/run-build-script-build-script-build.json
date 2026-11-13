@@ -1,1 +1,0 @@
-{"rustc":15591012930839861029,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[6024382616234287946,"build_script_build",false,13602477169038384788]],"local":[{"RerunIfChanged":{"output":"aarch64-skyline-switch\\debug\\build\\libc-87c2073d552e577b\\output","paths":["build.rs"]}}],"rustflags":[],"metadata":0,"config":0,"compile_kind":0}

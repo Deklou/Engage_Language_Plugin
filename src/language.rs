@@ -192,18 +192,23 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
 // This deliberately does not walk parent menus or recreate menus while
 // a confirmation dialog is closing.
 fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
-    unsafe {
-        let current_ptr = current_item as *mut ConfigBasicMenuItem;
-        let menu_ptr = current_item.menu as *mut engage::menu::BasicMenu<ConfigBasicMenuItem>;
-        let menu = &mut *menu_ptr;
-        for entry in menu.full_menu_item_list.iter_mut() {
-            let entry: &mut ConfigBasicMenuItem = &mut **entry;
-            if std::ptr::eq(entry as *mut ConfigBasicMenuItem, current_ptr) {
-                update_texts(entry);
-                continue;
-            }
+    // Update our own entry before borrowing the menu's item list.
+    // Never obtain a second mutable reference to this same item through the list.
+    update_texts(current_item);
 
-            // Ask the game's existing virtual methods to rebuild localized values.
+    let current_ptr = current_item as *const ConfigBasicMenuItem;
+
+    // ConfigBasicMenuItem::menu is already an &mut BasicMenu.
+    // Reborrow it directly instead of casting &BasicMenu to &mut BasicMenu.
+    for entry in current_item.menu.full_menu_item_list.iter_mut() {
+        let entry: &mut ConfigBasicMenuItem = &mut **entry;
+        if std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
+            continue;
+        }
+
+        // Recompute cached localized command/help fields using the game's
+        // existing virtual methods; then refresh the visible menu item.
+        unsafe {
             for name in ["SetCommandText", "SetHelpText"] {
                 if let Some(method) = entry.get_class().get_virtual_method(name) {
                     let call: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
@@ -211,8 +216,8 @@ fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
                     call(entry, method.method_info);
                 }
             }
-            entry.update_text();
         }
+        entry.update_text();
     }
 }
 
