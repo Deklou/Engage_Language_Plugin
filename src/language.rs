@@ -13,7 +13,7 @@ fn get_language_translations() -> HashMap<i32, Vec<&'static str>> {
     let mut translations = HashMap::new();
     translations.insert(0, vec!["日本語", "Japanese","" , "Japonés", "Japanese", "Japonais", "Japonés", "Japanisch", "Giapponese", "日本語", "日语", "일본어"]);
     translations.insert(1, vec!["日本語で", "English (North America)","" , "Inglés (Nortoamérica)", "English (North America)","Anglais (Amérique du Nord)", "English (North America)", "Englisch (Nordamerika)", "Inglese (Nord America)", "英语", "英语", "영어"]);
-    translations.insert(3, vec!["スペイン語", "Spanish (Latin America)","" , "Español (Latinoamérica)", "Spanish (Latin America)", "Espagnol (Amérique Latine)", "Español (Latinoamérica)", "Spanisch (Lateinamerika)", "Spagnolo (America Latina)", "西班牙语", "西班牙语", "스페인어"]);
+    translations.insert(3, vec!["スペイン語", "Spanish (Latin America)","" , "Español (Latinoamérica)", "Spanish (Latin America)", "Espagnol (Amérique Latine)", "Spanish (Latin America)", "Spanisch (Lateinamerika)", "Spagnolo (America Latina)", "西班牙语", "西班牙语", "스페인어"]);
     translations.insert(4, vec!["英語で", "English (Europe)","" , "Inglés (Europa)", "English (Europe)", "Anglais (Europe)", "Inglés (Europa)", "Englisch (Europa)", "Inglese (Europa)", "英文", "英文", "영어"]);
     translations.insert(5, vec!["フランス語", "French (Europe)","" , "Francés (Europa)", "French (Europe)", "Français (Europe)", "Francés (Europa)", "Französisch (Europa)", "Francese (Europa)", "法语", "法语", "프랑스어"]);
     translations.insert(6, vec!["スペイン語", "Spanish (Europe)","" , "Español (Europa)", "Spanish (Europe)", "Espagnol (Europe)", "Español (Europa)", "Spanisch (Europa)", "Spagnolo (Europa)", "西班牙语", "西班牙语", "스페인어"]);
@@ -147,7 +147,6 @@ thread_local! {
     static CURRENT_MENU_ITEM: RefCell<Option<*mut ConfigBasicMenuItem>> = RefCell::new(None);
 }
 
-
 struct LanguageConfirmation;
 
 //confirm the language change when the A button is pressed
@@ -159,14 +158,14 @@ extern "C" fn a_button_confirm(this: &mut ConfigBasicMenuItem, _method_info: Opt
         if PREVIEW_LANG != CURRENT_LANG {
             BasicMenuResult::se_cursor();
             YesNoDialog::bind::<LanguageConfirmation>(
-            this.menu,  
+            this.menu,
             get_localized_string("change_language_confirm", CURRENT_LANG),
             get_localized_string("confirm_yes", CURRENT_LANG),
             get_localized_string("confirm_no", CURRENT_LANG)
             );
         }
     BasicMenuResult::se_cursor()
-    }  
+    }
 }
 
 impl TwoChoiceDialogMethods for LanguageConfirmation {
@@ -178,15 +177,44 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
             reload_messages();
             CURRENT_MENU_ITEM.with(|item| {
                 if let Some(menu_item) = *item.borrow() {
-                    update_texts(&mut *menu_item);
+                    // The current entry is already handled by update_texts.
+                    // Recompute the command/help fields of the other configuration
+                    // entries, then redraw their already-instantiated UI elements.
+                    refresh_config_menu(&mut *menu_item);
                 }
             });
         }
         BasicMenuResult::new().with_close_this(true)
     }
-
 }
 
+// Experimental refresh of the currently open configuration menu.
+// This deliberately does not walk parent menus or recreate menus while
+// a confirmation dialog is closing.
+fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
+    unsafe {
+        let current_ptr = current_item as *mut ConfigBasicMenuItem;
+        let menu_ptr = current_item.menu as *mut engage::menu::BasicMenu<ConfigBasicMenuItem>;
+        let menu = &mut *menu_ptr;
+        for entry in menu.full_menu_item_list.iter_mut() {
+            let entry: &mut ConfigBasicMenuItem = &mut **entry;
+            if std::ptr::eq(entry as *mut ConfigBasicMenuItem, current_ptr) {
+                update_texts(entry);
+                continue;
+            }
+
+            // Ask the game's existing virtual methods to rebuild localized values.
+            for name in ["SetCommandText", "SetHelpText"] {
+                if let Some(method) = entry.get_class().get_virtual_method(name) {
+                    let call: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
+                        std::mem::transmute(method.method_info.method_ptr);
+                    call(entry, method.method_info);
+                }
+            }
+            entry.update_text();
+        }
+    }
+}
 
 //update the preview text based on the selected language
 fn update_preview_text(this: &mut ConfigBasicMenuItem) {
@@ -214,7 +242,7 @@ extern "C" fn language_callback() -> &'static mut ConfigBasicMenuItem {
     if let Some(method) = switch.get_class_mut().get_virtual_method_mut("ACall") {
         method.method_ptr = a_button_confirm as _;
     }
-    
+
     update_texts(switch);
     switch
 }
