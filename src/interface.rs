@@ -18,3 +18,6 @@ pub fn reflect_voice_setting();
 
 #[unity::from_offset("App", "Mess", "Reload")]
 pub fn reload_messages();
+
+#[unity::from_offset("App", "Mess", "Get")]
+pub fn get_message(label: &unity::prelude::Il2CppString) -> &'static unity::prelude::Il2CppString;

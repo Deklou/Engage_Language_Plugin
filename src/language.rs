@@ -3,7 +3,7 @@ use unity::prelude::*;
 use std::cell::RefCell;
 use engage::menu::{config::{ConfigBasicMenuItem, ConfigBasicMenuItemSwitchMethods}, BasicMenuResult};
 use engage::dialog::yesno::{BasicDialogItemYes, YesNoDialog, TwoChoiceDialogMethods};
-use crate::interface::{get_current_language, set_language, reflect_language_setting, reload_messages};
+use crate::interface::{get_current_language, set_language, reflect_language_setting, reload_messages, get_message};
 
 pub static mut PREVIEW_LANG: i32 = 1;
 pub static mut CURRENT_LANG: i32 = 1;
@@ -177,10 +177,18 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
                     capture_v9_parent(&*menu_item);
                 }
             });
+            let label = "MID_CONFIG_GAMESPEED_FAST".into();
+
+            let before = get_message(label).get_string().unwrap_or_default();
+            skyline::println!("[ELP V10.2] BEFORE lang={} text={}", get_current_language(), before);
+
             set_language(PREVIEW_LANG);
             CURRENT_LANG = PREVIEW_LANG;
             reflect_language_setting();
             reload_messages();
+
+            let after = get_message(label).get_string().unwrap_or_default();
+            skyline::println!("[ELP V10.2] AFTER lang={} text={}", get_current_language(), after);
             CURRENT_MENU_ITEM.with(|item| {
                 if let Some(menu_item) = *item.borrow() {
                     // The current entry is already handled by update_texts.
@@ -224,19 +232,53 @@ fn capture_v9_parent(current_item: &ConfigBasicMenuItem) {
 
 fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
     update_texts(current_item);
+
     let current_ptr = current_item as *const ConfigBasicMenuItem;
-    let parent_name = V9_PARENT_CLASS.with(|cell| cell.borrow().clone());
-    let mut marked = false;
+    let mut refreshed = 0usize;
+    let mut missing = 0usize;
+
     for entry in current_item.menu.full_menu_item_list.iter_mut() {
         let entry: &mut ConfigBasicMenuItem = &mut **entry;
-        if marked || std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
+
+        if std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
             continue;
         }
-        marked = true;
-        entry.title_text = "V9 PARENT CLASS".into();
-        entry.command_text = parent_name.as_str().into();
-        entry.update_text();
+
+        let mut found = 0usize;
+
+        for method_name in ["SetCommandText", "SetHelpText"] {
+            let method_ptr = entry
+                .get_class()
+                .get_virtual_method(method_name)
+                .map(|method| method.method_ptr);
+
+            if let Some(method_ptr) = method_ptr {
+                unsafe {
+                    let call: extern "C" fn(
+                        &mut ConfigBasicMenuItem,
+                        Option<&'static MethodInfo>,
+                    ) = std::mem::transmute(method_ptr);
+
+                    call(entry, None);
+                }
+
+                found += 1;
+            }
+        }
+
+        if found > 0 {
+            entry.update_text();
+            refreshed += 1;
+        } else {
+            missing += 1;
+        }
     }
+
+    skyline::println!(
+        "[ELP V10.3] REFRESH refreshed={} missing={}",
+        refreshed,
+        missing
+    );
 }
 
 //update the preview text based on the selected language
