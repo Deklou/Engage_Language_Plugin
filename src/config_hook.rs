@@ -1,9 +1,42 @@
-//! V10.16: generic MSBT-key title test on top of V10.15 native refresh.
+//! V10.17: exact Mess.Get return-pointer MSBT key capture on top of V10.16.
 use core::ffi::c_void;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::collections::HashMap;
 use unity::prelude::*;
 use unity::system::List;
 use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
+
+// Capture strictement limitee au CreateConfigMenu en cours :
+// Mess.Get(label) => adresse Il2CppString retournee, sans modifier le texte.
+static MESS_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
+static MESS_CAPTURE: Mutex<Option<HashMap<usize, Option<String>>>> = Mutex::new(None);
+static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+
+#[skyline::hook(offset = 0x25c9240)] // App.Mess.Get(Il2CppString), Engage 2.0.0
+fn mess_get_capture(label: *const Il2CppString, method_info: *const c_void) -> *const Il2CppString {
+    let result = original!()(label, method_info);
+    if !MESS_CAPTURE_ACTIVE.load(Ordering::Relaxed) || label.is_null() || result.is_null() {
+        return result;
+    }
+    unsafe {
+        let key = (&*label).get_string().unwrap_or_default();
+        if !key.starts_with("MID_") || key.len() > 180 { return result; }
+        if let Ok(mut guard) = MESS_CAPTURE.lock() {
+            if let Some(ref mut map) = *guard {
+                if map.len() >= 8192 { return result; }
+                use std::collections::hash_map::Entry;
+                match map.entry(result as usize) {
+                    Entry::Vacant(v) => { v.insert(Some(key)); }
+                    Entry::Occupied(mut o) => {
+                        if o.get().as_ref() != Some(&key) { o.insert(None); }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
 
 static NATIVE_ITEMS: [AtomicUsize; 25] = [
     AtomicUsize::new(0),
@@ -154,7 +187,11 @@ const TARGET_CLASSES: [&str; 25] = [
 #[skyline::hook(offset = 0x253a470)]
 fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
     for item in NATIVE_ITEMS.iter() { item.store(0, Ordering::Relaxed); }
+    if let Ok(mut keys) = NATIVE_TITLE_KEYS.lock() { keys.clear(); keys.resize(25, None); }
+    if let Ok(mut captured) = MESS_CAPTURE.lock() { *captured = Some(HashMap::new()); }
+    MESS_CAPTURE_ACTIVE.store(true, Ordering::Relaxed);
     original!()(this, method_info);
+    MESS_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
     if this.is_null() { return; }
     unsafe {
         let child = ((this as *const u8).add(0x38) as *const *const c_void).read();
@@ -176,6 +213,22 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
             }
             let ptr = *entry as *const ConfigBasicMenuItem;
             NATIVE_ITEMS[i].store(ptr as usize, Ordering::Relaxed);
+            // Exact pointer matching, no guessing by translated text.
+            // Title field is m_TitleText (offset 0x68), exposed by the wrapper.
+            let title_ptr = (&*ptr).title_text as *const Il2CppString as usize;
+            let key = if let Ok(map_guard) = MESS_CAPTURE.lock() {
+                map_guard.as_ref().and_then(|map| map.get(&title_ptr).cloned()).flatten()
+            } else { None };
+            let before = (&*ptr).title_text.get_string().unwrap_or_default();
+            if let Ok(mut keys) = NATIVE_TITLE_KEYS.lock() {
+                if keys.len() == 25 { keys[i] = key.clone(); }
+            }
+            skyline::println!("[ELP V10.17] TITLE #{} class={} key={:?} current={:?}", i, expected, key, before);
+        }
+        if let Ok(mut captured) = MESS_CAPTURE.lock() {
+            let n = captured.as_ref().map(|m| m.len()).unwrap_or(0);
+            skyline::println!("[ELP V10.17] captured Mess.Get unique return pointers={}", n);
+            *captured = None;
         }
         skyline::println!("[ELP V10.15] captured up to 25 native rows, list size={}", size);
     }
@@ -213,6 +266,20 @@ pub fn refresh_native_settings() {
             } else {
                 skyline::println!("[ELP V10.16] item #{} m_name=NULL", i);
             }
+            // If an exact MSBT key was captured for this title, recompute it.
+            // Distinctly skip unknown mappings rather than fabricate one.
+            let title_key = if let Ok(keys) = NATIVE_TITLE_KEYS.lock() {
+                keys.get(i).cloned().flatten()
+            } else { None };
+            if let Some(key) = title_key {
+                let label: &'static Il2CppString = key.as_str().into();
+                let translated = crate::interface::get_message(label);
+                let value = translated.get_string().unwrap_or_default();
+                if !value.is_empty() && value != key {
+                    item.title_text = translated;
+                    skyline::println!("[ELP V10.17] REFRESH TITLE #{} key={} new={:?}", i, key, value);
+                }
+            }
             match i {
                 0 => { native_cmd_0(ptr.cast(), core::ptr::null()); native_help_0(ptr.cast(), core::ptr::null()); },
                 1 => { native_cmd_1(ptr.cast(), core::ptr::null()); native_help_1(ptr.cast(), core::ptr::null()); },
@@ -248,6 +315,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.15] Installing native refresh (rows 0..24)");
-    skyline::install_hooks!(config_sequence_create_config_menu);
+    skyline::println!("[ELP V10.17] Installing Mess.Get title-key capture + native refresh");
+    skyline::install_hooks!(mess_get_capture, config_sequence_create_config_menu);
 }
