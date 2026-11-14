@@ -1,4 +1,4 @@
-//! V10.15: refresh native setting values and help for rows 0..24.
+//! V10.16: generic MSBT-key title test on top of V10.15 native refresh.
 use core::ffi::c_void;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use unity::prelude::*;
@@ -192,6 +192,26 @@ pub fn refresh_native_settings() {
             if class != format!("{:?}", expected) && class != format!("Some({:?})", expected) {
                 target.store(0, Ordering::Relaxed);
                 continue;
+            }
+            // BasicMenuItem.m_name, offset 0x20 on Engage 2.0.0.
+            // Different from ConfigBasicMenuItem.m_TitleText (0x68).
+            // This is a guarded experiment: only MID_* keys can rewrite a title.
+            let name_ptr = ((ptr as *const u8).add(0x20)
+                as *const *const Il2CppString).read();
+            if !name_ptr.is_null() {
+                let name = (&*name_ptr).get_string().unwrap_or_default();
+                skyline::println!("[ELP V10.16] item #{} m_name={:?}", i, name);
+                if name.starts_with("MID_") {
+                    let key: &'static Il2CppString = name.as_str().into();
+                    let translated = crate::interface::get_message(key);
+                    let title = translated.get_string().unwrap_or_default();
+                    if !title.is_empty() && title != name {
+                        item.title_text = translated;
+                        skyline::println!("[ELP V10.16] title #{} => {:?}", i, title);
+                    }
+                }
+            } else {
+                skyline::println!("[ELP V10.16] item #{} m_name=NULL", i);
             }
             match i {
                 0 => { native_cmd_0(ptr.cast(), core::ptr::null()); native_help_0(ptr.cast(), core::ptr::null()); },
