@@ -197,6 +197,7 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
                     // Recompute the command/help fields of the other configuration
                     // entries, then redraw their already-instantiated UI elements.
                     refresh_config_menu(&mut *menu_item);
+                    crate::voice::refresh_voice_after_language_change(&mut *menu_item);
                 }
             });
         }

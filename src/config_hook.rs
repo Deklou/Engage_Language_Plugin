@@ -280,6 +280,44 @@ pub fn refresh_settings_titlebar() {
                     if *role == "Title" { &title_value } else { &help_value });
             }
         }
+        // V10.25: native titlebar X keyhelp (Reset Settings).
+        // V10.22 confirmed the hierarchy for both animation slots:
+        // ContentTitle{0,1}/KeyHelpTitleBar/X/Text.
+        // The MSBT is re-resolved after Mess.Reload, just like Title/Help.
+        let reset_key: &'static Il2CppString = "MID_KEYHELP_MENU_RESET".into();
+        let reset = crate::interface::get_message(reset_key);
+        let reset_value = reset.get_string().unwrap_or_default();
+        if reset_value.is_empty() || reset_value == "MID_KEYHELP_MENU_RESET" {
+            skyline::println!("[ELP V10.25] SKIP unresolved reset key value={:?}", reset_value);
+        } else {
+            let mut reset_written = 0usize;
+            for slot in 0..2 {
+                let part = elp_tmp_child(content,
+                    if slot == 0 { "ContentTitle0" } else { "ContentTitle1" });
+                let keyhelp = elp_tmp_child(part, "KeyHelpTitleBar");
+                let x = elp_tmp_child(keyhelp, "X");
+                let text_node = elp_tmp_child(x, "Text");
+                if text_node.is_null() {
+                    skyline::println!("[ELP V10.25] MISSING slot={} X/Text node", slot);
+                    continue;
+                }
+                let go = elp_ui_get_game_object(text_node, core::ptr::null());
+                if go.is_null() { continue; }
+                let type_name: &'static Il2CppString = "TextMeshProUGUI".into();
+                let component = elp_tmp_get_component_by_name(go,
+                    type_name as *const Il2CppString, core::ptr::null());
+                if component.is_null() {
+                    skyline::println!("[ELP V10.25] MISSING slot={} X/Text TMP", slot);
+                    continue;
+                }
+                elp_tmp_set_text_2(component, reset as *const Il2CppString,
+                    false, core::ptr::null());
+                reset_written += 1;
+                skyline::println!("[ELP V10.25] RESET slot={} component={:p} value={:?}",
+                    slot, component, reset_value);
+            }
+            skyline::println!("[ELP V10.25] DONE reset_written={}/2", reset_written);
+        }
         skyline::println!("[ELP V10.24] DONE written={}/4", written);
     }
 }

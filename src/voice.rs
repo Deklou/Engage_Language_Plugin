@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use unity::prelude::*;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use engage::menu::{config::{ConfigBasicMenuItem, ConfigBasicMenuItemSwitchMethods}, BasicMenuResult};
 use engage::dialog::yesno::{BasicDialogItemYes, YesNoDialog, TwoChoiceDialogMethods};
 use crate::interface::{reload_messages, get_current_voice, set_voice, reflect_voice_setting};
@@ -8,6 +9,10 @@ use crate::language::CURRENT_LANG;
 
 static mut PREVIEW_VOICE: i32 = 1;
 static mut CURRENT_VOICE: i32 = 1;
+
+// V10.26: the last allocated plugin voice row; NEVER dereference this pointer
+// unless it is also found in the currently active language settings menu.
+static VOICE_ITEM_PTR: AtomicUsize = AtomicUsize::new(0);
 
 //get the voice translations for each voice ID
 fn get_voice_translations() -> HashMap<i32, Vec<&'static str>> {
@@ -181,6 +186,37 @@ fn update_texts(this: &mut ConfigBasicMenuItem) {
     }
 }
 
+
+// V10.26: refresh the plugin's existing Change Voice row when the language
+// changes. Only touch the voice item if it belongs to this same live menu.
+pub fn refresh_voice_after_language_change(language_item: &mut ConfigBasicMenuItem) {
+    let voice_ptr = VOICE_ITEM_PTR.load(Ordering::Relaxed) as *mut ConfigBasicMenuItem;
+    if voice_ptr.is_null() {
+        skyline::println!("[ELP V10.26] VOICE SKIP no registered voice item");
+        return;
+    }
+    let list = &language_item.menu.full_menu_item_list;
+    let len = list.len();
+    if len < 2 || len > 16 || len > list.capacity() {
+        skyline::println!("[ELP V10.26] VOICE SKIP unexpected menu len={}", len);
+        return;
+    }
+    let found = list.iter().take(len).any(|entry| {
+        (*entry as *const ConfigBasicMenuItem) == (voice_ptr as *const ConfigBasicMenuItem)
+    });
+    if !found {
+        skyline::println!("[ELP V10.26] VOICE SKIP item not in active menu");
+        return;
+    }
+    unsafe {
+        let item = &mut *voice_ptr;
+        update_texts(item);
+        skyline::println!("[ELP V10.26] VOICE REFRESH title={:?} command={:?}",
+            item.title_text.get_string().unwrap_or_default(),
+            item.command_text.get_string().unwrap_or_default());
+    }
+}
+
 //callback function for voice selection
 #[no_mangle]
 extern "C" fn voice_callback() -> &'static mut ConfigBasicMenuItem {
@@ -190,6 +226,7 @@ extern "C" fn voice_callback() -> &'static mut ConfigBasicMenuItem {
     }
     
     update_texts(switch);
+    VOICE_ITEM_PTR.store(switch as *mut ConfigBasicMenuItem as usize, Ordering::Relaxed);
     switch
 }
 
