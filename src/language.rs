@@ -233,52 +233,24 @@ fn capture_v9_parent(current_item: &ConfigBasicMenuItem) {
 fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
     update_texts(current_item);
 
-    let current_ptr = current_item as *const ConfigBasicMenuItem;
-    let mut refreshed = 0usize;
-    let mut missing = 0usize;
-
-    for entry in current_item.menu.full_menu_item_list.iter_mut() {
-        let entry: &mut ConfigBasicMenuItem = &mut **entry;
-
-        if std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
-            continue;
-        }
-
-        let mut found = 0usize;
-
-        for method_name in ["SetCommandText", "SetHelpText"] {
-            let method_ptr = entry
-                .get_class()
-                .get_virtual_method(method_name)
-                .map(|method| method.method_ptr);
-
-            if let Some(method_ptr) = method_ptr {
-                unsafe {
-                    let call: extern "C" fn(
-                        &mut ConfigBasicMenuItem,
-                        Option<&'static MethodInfo>,
-                    ) = std::mem::transmute(method_ptr);
-
-                    call(entry, None);
-                }
-
-                found += 1;
-            }
-        }
-
-        if found > 0 {
-            entry.update_text();
-            refreshed += 1;
-        } else {
-            missing += 1;
-        }
-    }
-
+    // V10.6 : le Deref de List<T> couvre la CAPACITE du tableau.
+    // Ne jamais visiter les emplacements apres list.len() (nombre d'elements reels).
+    // Diagnostic de pointeurs uniquement : aucun get_class(), appel virtuel ou update_text() natif.
+    let list = &current_item.menu.full_menu_item_list;
+    let size = list.len();
+    let capacity = list.capacity();
     skyline::println!(
-        "[ELP V10.3] REFRESH refreshed={} missing={}",
-        refreshed,
-        missing
+        "[ELP V10.6] list size={} capacity={}", size, capacity
     );
+    if size > capacity {
+        skyline::println!("[ELP V10.6] INVALID list size > capacity; abort");
+        return;
+    }
+    for (i, entry) in list.iter().take(size).enumerate() {
+        let ptr = *entry as *const ConfigBasicMenuItem;
+        skyline::println!("[ELP V10.6] entry #{} ptr={:p}", i, ptr);
+    }
+    skyline::println!("[ELP V10.6] completed {} entries", size);
 }
 
 //update the preview text based on the selected language
