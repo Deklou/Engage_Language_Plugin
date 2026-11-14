@@ -1,12 +1,35 @@
 use std::collections::HashMap;
 use unity::prelude::*;
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use engage::menu::{config::{ConfigBasicMenuItem, ConfigBasicMenuItemSwitchMethods}, BasicMenuResult};
 use engage::dialog::yesno::{BasicDialogItemYes, YesNoDialog, TwoChoiceDialogMethods};
 use crate::interface::{get_current_language, set_language, reflect_language_setting, reload_messages};
 
 pub static mut PREVIEW_LANG: i32 = 1;
 pub static mut CURRENT_LANG: i32 = 1;
+
+// V10 diagnostic: intercept the native ConfigMenu initialization.
+// Ghidra (Engage 2.0.0): 0x7102538570 => main offset 0x2538570.
+// Do NOT dereference or retain a live reference to the menu. A pointer value
+// is recorded only for display; lifecycle handling is not established yet.
+static V10_CONFIG_INIT_COUNT: AtomicUsize = AtomicUsize::new(0);
+static V10_LAST_CONFIG_ADDRESS: AtomicUsize = AtomicUsize::new(0);
+
+#[skyline::hook(offset = 0x2538570)]
+unsafe fn v10_config_menu_on_initialize(
+    this: *mut core::ffi::c_void,
+    method: *const core::ffi::c_void,
+) {
+    original!()(this, method);
+    V10_LAST_CONFIG_ADDRESS.store(this as usize, Ordering::Relaxed);
+    V10_CONFIG_INIT_COUNT.fetch_add(1, Ordering::Relaxed);
+}
+
+pub fn install_v10_diagnostic() {
+    skyline::install_hooks!(v10_config_menu_on_initialize);
+}
+
 
 //get the language translations for each language ID
 fn get_language_translations() -> HashMap<i32, Vec<&'static str>> {
@@ -171,12 +194,6 @@ extern "C" fn a_button_confirm(this: &mut ConfigBasicMenuItem, _method_info: Opt
 impl TwoChoiceDialogMethods for LanguageConfirmation {
     extern "C" fn on_first_choice(_this: &mut BasicDialogItemYes, _method_info: OptionalMethod) -> BasicMenuResult {
         unsafe {
-            // V9: inspect the direct parent before SetLanguage/ReloadMessages.
-            CURRENT_MENU_ITEM.with(|item| {
-                if let Some(menu_item) = *item.borrow() {
-                    capture_v9_parent(&*menu_item);
-                }
-            });
             set_language(PREVIEW_LANG);
             CURRENT_LANG = PREVIEW_LANG;
             reflect_language_setting();
@@ -194,47 +211,28 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
     }
 }
 
-// Experimental refresh of the currently open configuration menu.
-// This deliberately does not walk parent menus or recreate menus while
-// a confirmation dialog is closing.
-// V4 diagnostic: determine whether this callback really reaches other config items.
-// Test only. Does not attempt to translate other settings yet.
-// V5 diagnostic: does InitContent actually repopulate already-instantiated text fields?
-// V6 diagnostic: direct non-virtual IL2CPP method lookup on derived setting class.
-// V5 proved InitContent does not reset title or command for the existing item.
-// V8: pointer-only diagnostic. NO DEREFERENCE OF PARENT PROCESSES.
-// Can be installed directly over V7. No intermediate restore needed.
-thread_local! {
-    static V9_PARENT_CLASS: RefCell<String> = RefCell::new(String::from("NOT READ"));
-}
-
-// This test reads exactly one parent before the language resources reload.
-// Unlike V7, it does not walk the parent chain after reload_messages().
-fn capture_v9_parent(current_item: &ConfigBasicMenuItem) {
-    let info = match current_item.menu.proc.parent.as_ref() {
-        None => "NONE".to_string(),
-        Some(parent) => {
-            // V9 risk boundary: dereferencing the direct parent to read its class.
-            // If this crashes, parent inspection itself is unsafe on this runtime.
-            parent.get_class().get_name()
-        }
-    };
-    V9_PARENT_CLASS.with(|cell| *cell.borrow_mut() = info);
-}
-
+// V10: show whether the native ConfigMenu.OnInitialize hook has ever fired.
+// Only access the known custom menu list (validated in V4-V9).
+// No parent traversal, no dereference of an arbitrary native menu pointer.
 fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
     update_texts(current_item);
     let current_ptr = current_item as *const ConfigBasicMenuItem;
-    let parent_name = V9_PARENT_CLASS.with(|cell| cell.borrow().clone());
+    let count = V10_CONFIG_INIT_COUNT.load(Ordering::Relaxed);
+    let address = V10_LAST_CONFIG_ADDRESS.load(Ordering::Relaxed);
     let mut marked = false;
+
     for entry in current_item.menu.full_menu_item_list.iter_mut() {
         let entry: &mut ConfigBasicMenuItem = &mut **entry;
         if marked || std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
             continue;
         }
         marked = true;
-        entry.title_text = "V9 PARENT CLASS".into();
-        entry.command_text = parent_name.as_str().into();
+        entry.title_text = format!("V10 CONFIG INIT: {}", count).into();
+        entry.command_text = if count == 0 {
+            "HOOK NOT SEEN".into()
+        } else {
+            format!("0x{:X}", address).into()
+        };
         entry.update_text();
     }
 }
