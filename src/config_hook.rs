@@ -173,6 +173,76 @@ fn elp_trace_titlebar_from_config(seq: *const c_void) {
     }
 }
 
+// V10.23: GameObject.GetComponentByName(Il2CppString) -- verified in
+// DivineDragonFanClub/engage-il2cpp, UnityEngine.GameObject, Engage v2.0.0.
+// No text reads/writes yet: first prove the component type and object identity.
+#[skyline::from_offset(0x2c4dcf0)]
+fn elp_tmp_get_component_by_name(go: *const c_void, type_name: *const Il2CppString,
+    mi: *const c_void) -> *const c_void;
+
+unsafe fn elp_tmp_child(parent: *const c_void, target: &str) -> *const c_void {
+    if parent.is_null() { return core::ptr::null(); }
+    let n = elp_ui_get_child_count(parent, core::ptr::null());
+    if !(0..=100).contains(&n) { return core::ptr::null(); }
+    for i in 0..n {
+        let ch = elp_ui_get_child(parent, i, core::ptr::null());
+        if ch.is_null() { continue; }
+        let go = elp_ui_get_game_object(ch, core::ptr::null());
+        if go.is_null() { continue; }
+        let name = elp_ui_get_name(go, core::ptr::null());
+        if !name.is_null() && matches!((&*name).get_string().as_deref(), Ok(x) if x == target) {
+            return ch;
+        }
+    }
+    core::ptr::null()
+}
+
+unsafe fn elp_tmp_probe(go: *const c_void, slot: i32, role: &str) {
+    if go.is_null() { return; }
+    // GameObject.GetComponentByName is a verified method; the exact class name
+    // accepted by Unity is deliberately probed rather than assumed.
+    let class_names = ["TextMeshProUGUI", "TMPro.TextMeshProUGUI", "TMP_Text"];
+    for class_name in class_names.iter() {
+        let il_name: &'static Il2CppString = (*class_name).into();
+        let component = elp_tmp_get_component_by_name(go, il_name as *const Il2CppString,
+            core::ptr::null());
+        skyline::println!("[ELP V10.23] COMPONENT slot={} role={} go={:p} lookup={} ptr={:p}",
+            slot, role, go, class_name, component);
+        if !component.is_null() { break; }
+    }
+}
+
+fn elp_trace_titlebar_tmp_components(seq: *const c_void) {
+    if seq.is_null() { return; }
+    unsafe {
+        let go = ((seq as *const u8).add(0x70) as *const *const c_void).read();
+        if go.is_null() { return; }
+        let config_root = elp_ui_get_transform(go, core::ptr::null());
+        if config_root.is_null() { return; }
+        let game_ui = elp_ui_get_parent(config_root, core::ptr::null());
+        let titlebar = elp_tmp_child(game_ui, "TitleBarRootCanvas");
+        let content_root = elp_tmp_child(titlebar, "ContentTitleRoot(Clone)");
+        let all = elp_tmp_child(content_root, "ContentsTitleAll");
+        let content = elp_tmp_child(all, "ContentTitle");
+        skyline::println!("[ELP V10.23] TMP BEGIN titlebar={:p} content={:p}", titlebar, content);
+        if content.is_null() { return; }
+        for slot in 0..2 {
+            let slot_name = if slot == 0 { "ContentTitle0" } else { "ContentTitle1" };
+            let part = elp_tmp_child(content, slot_name);
+            let title_help = elp_tmp_child(part, "TitleHelp");
+            for role in ["Title", "Help"].iter() {
+                let child = elp_tmp_child(title_help, role);
+                let part_go = if child.is_null() { core::ptr::null() }
+                    else { elp_ui_get_game_object(child, core::ptr::null()) };
+                skyline::println!("[ELP V10.23] TARGET slot={} role={} node={:p} go={:p}",
+                    slot, role, child, part_go);
+                elp_tmp_probe(part_go, slot, role);
+            }
+        }
+        skyline::println!("[ELP V10.23] TMP END");
+    }
+}
+
 fn elp_trace_settings_ui_tree(seq: *const c_void) {
     if seq.is_null() { return; }
     unsafe {
@@ -412,9 +482,10 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
     MESS_CAPTURE_ACTIVE.store(true, Ordering::Relaxed);
     original!()(this, method_info);
     MESS_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
-    elp_trace_settings_ui_tree(this);
-    elp_trace_settings_parent_siblings(this);
-    elp_trace_titlebar_from_config(this);
+    // V10.23: replaced broad probe: elp_trace_settings_ui_tree(this);
+    // V10.23: replaced broad probe: elp_trace_settings_parent_siblings(this);
+    // V10.23: replaced broad probe: elp_trace_titlebar_from_config(this);
+    elp_trace_titlebar_tmp_components(this);
     if this.is_null() { return; }
     unsafe {
         let child = ((this as *const u8).add(0x38) as *const *const c_void).read();
@@ -539,6 +610,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.22] Installing targeted TitleBar hierarchy trace (keeps V10.17 refresh)");
+    skyline::println!("[ELP V10.23] Installing focused TMP-component trace (keeps V10.17 refresh)");
     skyline::install_hooks!(mess_get_capture, config_sequence_start_sequence, config_sequence_create_config_menu);
 }
