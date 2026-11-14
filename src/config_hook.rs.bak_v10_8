@@ -1,0 +1,36 @@
+//! V10.8 - Capture du retour de ConfigMenu.CreateBind (Engage 2.0.0).
+//! Signature verifiee dans engage-il2cpp genere : static GameObject CreateBind(ProcInst super).
+//! Le retour est le GameObject, PAS l'instance ConfigMenu : ne pas le caster en menu.
+
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static BIND_CALLS: AtomicUsize = AtomicUsize::new(0);
+static CREATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+// Hook sur la methode statique : GameObject* CreateBind(ProcInst*, MethodInfo*).
+// Aucun champ Unity/IL2CPP n'est dereference ; seul le pointeur retourne est journalise.
+#[skyline::hook(offset = 0x2538a10)]
+fn native_config_menu_create_bind(
+    parent: *mut c_void,
+    method_info: *const c_void,
+) -> *mut c_void {
+    let n = BIND_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!("[ELP V10.8] BIND ENTER #{} parent={:p}", n, parent);
+    let game_object: *mut c_void = original!()(parent, method_info);
+    skyline::println!("[ELP V10.8] BIND EXIT #{} game_object={:p}", n, game_object);
+    game_object
+}
+
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    let n = CREATE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!("[ELP V10.8] CREATE ENTER #{} seq={:p}", n, this);
+    original!()(this, method_info);
+    skyline::println!("[ELP V10.8] CREATE EXIT #{}", n);
+}
+
+pub fn install() {
+    skyline::println!("[ELP V10.8] Installing ConfigMenu.CreateBind return capture");
+    skyline::install_hooks!(native_config_menu_create_bind, config_sequence_create_config_menu);
+}

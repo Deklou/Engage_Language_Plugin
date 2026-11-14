@@ -1,0 +1,46 @@
+//! V10.12 : énumération bornée en lecture seule des classes des éléments natifs.
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use unity::prelude::*;
+use unity::system::List;
+use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
+
+static CREATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    let n = CREATE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!("[ELP V10.12] CREATE ENTER #{}", n);
+    original!()(this, method_info);
+    if this.is_null() { return; }
+    unsafe {
+        let seq = this as *const u8;
+        let child = (seq.add(0x38) as *const *const c_void).read();
+        if child.is_null() { skyline::println!("[ELP V10.12] no child"); return; }
+        let obj = &*(child as *const ConfigMenu<()>);
+        let class_name = format!("{:?}", obj.get_class().get_name());
+        skyline::println!("[ELP V10.12] first child class={}", class_name);
+        if class_name != r#""ConfigMenu""# && class_name != r#"Some("ConfigMenu")"# { return; }
+        let full = ((child as *const u8).add(0x80) as *const *const List<ConfigBasicMenuItem>).read();
+        if full.is_null() { skyline::println!("[ELP V10.12] full list null"); return; }
+        let list = &*full;
+        let size = list.len();
+        let capacity = list.capacity();
+        skyline::println!("[ELP V10.12] native list size={} capacity={}", size, capacity);
+        if size > capacity || size > 128 { skyline::println!("[ELP V10.12] invalid size; abort"); return; }
+        for (i, entry) in list.iter().take(size).enumerate() {
+            let ptr = *entry as *const ConfigBasicMenuItem;
+            if ptr.is_null() {
+                skyline::println!("[ELP V10.12] item #{} NULL", i);
+                continue;
+            }
+            skyline::println!("[ELP V10.12] item #{} ptr={:p} class={:?}", i, ptr, entry.get_class().get_name());
+        }
+        skyline::println!("[ELP V10.12] completed {} native entries", size);
+    }
+}
+
+pub fn install() {
+    skyline::println!("[ELP V10.12] Installing native class enumeration");
+    skyline::install_hooks!(config_sequence_create_config_menu);
+}

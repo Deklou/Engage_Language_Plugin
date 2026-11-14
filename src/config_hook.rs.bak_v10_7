@@ -1,0 +1,57 @@
+//! V10.7 - Capture du ConfigMenu natif de FE Engage 2.0.0.
+//! Sources: engage-il2cpp genere pour 2.0.0 :
+//! ConfigMenu::.ctor(List<BasicMenuItem>, ConfigMenuContent) = 0x2538360
+//! ConfigSequence::CreateConfigMenu() = 0x253a470
+//! Aucune methode virtuelle, aucun element de liste dereference.
+
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static CREATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+static CTOR_CALLS: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_NATIVE_MENU: AtomicUsize = AtomicUsize::new(0);
+static ACTIVE_NATIVE_LIST: AtomicUsize = AtomicUsize::new(0);
+
+// Constructeur de ConfigMenu, non celui de ConfigBasicMenuItem.
+// Signature verifiee dans les bindings generes pour Engage 2.0.0.
+#[skyline::hook(offset = 0x2538360)]
+fn native_config_menu_ctor(
+    this: *mut c_void,
+    menu_item_list: *mut c_void,
+    menu_content: *mut c_void,
+    method_info: *const c_void,
+) {
+    let n = CTOR_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!(
+        "[ELP V10.7] NATIVE CTOR ENTER #{} this={:p} list={:p} content={:p}",
+        n, this, menu_item_list, menu_content
+    );
+    original!()(this, menu_item_list, menu_content, method_info);
+    ACTIVE_NATIVE_MENU.store(this as usize, Ordering::Relaxed);
+    ACTIVE_NATIVE_LIST.store(menu_item_list as usize, Ordering::Relaxed);
+    skyline::println!("[ELP V10.7] NATIVE CTOR EXIT #{}", n);
+}
+
+// Confirme que la creation native s'est terminee.
+// Reinitialise le pointeur au debut d'une NOUVELLE creation : pas de reuse ancien.
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    let n = CREATE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    ACTIVE_NATIVE_MENU.store(0, Ordering::Relaxed);
+    ACTIVE_NATIVE_LIST.store(0, Ordering::Relaxed);
+    skyline::println!("[ELP V10.7] CREATE ENTER #{} seq={:p}", n, this);
+    original!()(this, method_info);
+    let menu = ACTIVE_NATIVE_MENU.load(Ordering::Relaxed);
+    let list = ACTIVE_NATIVE_LIST.load(Ordering::Relaxed);
+    skyline::println!(
+        "[ELP V10.7] CREATE EXIT #{} native_menu=0x{:X} native_list=0x{:X}",
+        n, menu, list
+    );
+}
+
+// Ne pas dereferencer ces adresses depuis le dialogue : elles sont des pointeurs
+// de diagnostic, pas encore des references garanties pendant sa fermeture.
+pub fn install() {
+    skyline::println!("[ELP V10.7] Installing native ConfigMenu constructor capture");
+    skyline::install_hooks!(native_config_menu_ctor, config_sequence_create_config_menu);
+}

@@ -1,0 +1,38 @@
+//! V10.10 — lecture bornée de la hiérarchie ProcInst sous ConfigSequence.
+//! Engage 2.0.0: ProcInst.m_Child=0x38, m_Next=0x48, ConfigSequence.m_ConfigObject=0x70.
+//! Aucun appel IL2CPP, aucune mutation, aucun pointeur persistant.
+
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+static CREATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    let n = CREATE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!("[ELP V10.10] CREATE ENTER #{} seq={:p}", n, this);
+    original!()(this, method_info);
+    if this.is_null() {
+        skyline::println!("[ELP V10.10] CREATE EXIT #{} null sequence", n);
+        return;
+    }
+    unsafe {
+        let sequence = this as *const u8;
+        let game_object = (sequence.add(0x70) as *const *const c_void).read();
+        let first_child = (sequence.add(0x38) as *const *const c_void).read();
+        skyline::println!("[ELP V10.10] CREATE EXIT #{} game_object={:p} first_child={:p}",
+            n, game_object, first_child);
+        // Only the first link is followed. ProcInst's documented layout is used;
+        // no vtable access, array traversal or guessing of object type.
+        if !first_child.is_null() {
+            let next = ((first_child as *const u8).add(0x48) as *const *const c_void).read();
+            let nested_child = ((first_child as *const u8).add(0x38) as *const *const c_void).read();
+            skyline::println!("[ELP V10.10] FIRST_CHILD proc={:p} next={:p} child={:p}",
+                first_child, next, nested_child);
+        }
+    }
+}
+
+pub fn install() {
+    skyline::println!("[ELP V10.10] Installing ProcInst child inspection (CreateConfigMenu only)");
+    skyline::install_hooks!(config_sequence_create_config_menu);
+}

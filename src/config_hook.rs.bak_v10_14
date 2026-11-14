@@ -1,0 +1,115 @@
+//! V10.14: refresh only the first seven verified native config switch items.
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use unity::prelude::*;
+use unity::system::List;
+use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
+
+static NATIVE_ITEMS: [AtomicUsize; 7] = [
+    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+    AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+#[skyline::from_offset(0x24690f0)]
+fn native_cmd_0(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x24692b0)]
+fn native_help_0(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x20addd0)]
+fn native_cmd_1(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x20adf90)]
+fn native_help_1(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x22e96a0)]
+fn native_cmd_2(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x22e9810)]
+fn native_help_2(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x250c220)]
+fn native_cmd_3(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x250c390)]
+fn native_help_3(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x193a6b0)]
+fn native_cmd_4(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x193a7e0)]
+fn native_help_4(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x202e110)]
+fn native_cmd_5(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x202e240)]
+fn native_help_5(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x202dcd0)]
+fn native_cmd_6(this: *mut c_void, method_info: *const c_void);
+#[skyline::from_offset(0x202de00)]
+fn native_help_6(this: *mut c_void, method_info: *const c_void);
+
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    for entry in NATIVE_ITEMS.iter() { entry.store(0, Ordering::Relaxed); }
+    original!()(this, method_info);
+    if this.is_null() { return; }
+    unsafe {
+        let child = ((this as *const u8).add(0x38) as *const *const c_void).read();
+        if child.is_null() { return; }
+        let menu = &*(child as *const ConfigMenu<()>);
+        let menu_class = format!("{:?}", menu.get_class().get_name());
+        if menu_class != r#""ConfigMenu""# && menu_class != r#"Some("ConfigMenu")"# { return; }
+        let full = ((child as *const u8).add(0x80) as *const *const List<ConfigBasicMenuItem>).read();
+        if full.is_null() { return; }
+        let list = &*full;
+        let size = list.len();
+        if size < 7 || size > list.capacity() || size > 128 { return; }
+        for (i, entry) in list.iter().take(7).enumerate() {
+            let actual = format!("{:?}", entry.get_class().get_name());
+            let expected = TARGET_CLASSES[i];
+            if actual != format!("{:?}", expected) && actual != format!("Some({:?})", expected) {
+                skyline::println!("[ELP V10.14] capture skip #{} actual={} expected={}", i, actual, expected);
+                continue;
+            }
+            let ptr = *entry as *const ConfigBasicMenuItem;
+            NATIVE_ITEMS[i].store(ptr as usize, Ordering::Relaxed);
+        }
+        skyline::println!("[ELP V10.14] captured native rows 0..6; list size={}", size);
+    }
+}
+
+const TARGET_CLASSES: [&str; 7] = [
+    "BattleAnimeTypeMenuItem",
+    "SupportAnimeTypeMenuItem",
+    "EngageAnimeTypeMenuItem",
+    "GameSpeedMenuItem",
+    "AISkipMenuItem",
+    "MapUnitOperationMenuItem",
+    "MapUnitGaugeMenuItem",
+];
+
+pub fn refresh_native_settings() {
+    for (i, target) in NATIVE_ITEMS.iter().enumerate() {
+        let ptr = target.load(Ordering::Relaxed) as *mut ConfigBasicMenuItem;
+        if ptr.is_null() { continue; }
+        unsafe {
+            let item = &mut *ptr;
+            let actual = format!("{:?}", item.get_class().get_name());
+            let expected = TARGET_CLASSES[i];
+            if actual != format!("{:?}", expected) && actual != format!("Some({:?})", expected) {
+                skyline::println!("[ELP V10.14] refresh skip #{} unexpected class={}", i, actual);
+                target.store(0, Ordering::Relaxed);
+                continue;
+            }
+            skyline::println!("[ELP V10.14] #{} BEFORE={:?}", i, item.command_text.get_string());
+            match i {
+                0 => { native_cmd_0(ptr.cast(), core::ptr::null()); native_help_0(ptr.cast(), core::ptr::null()); },
+                1 => { native_cmd_1(ptr.cast(), core::ptr::null()); native_help_1(ptr.cast(), core::ptr::null()); },
+                2 => { native_cmd_2(ptr.cast(), core::ptr::null()); native_help_2(ptr.cast(), core::ptr::null()); },
+                3 => { native_cmd_3(ptr.cast(), core::ptr::null()); native_help_3(ptr.cast(), core::ptr::null()); },
+                4 => { native_cmd_4(ptr.cast(), core::ptr::null()); native_help_4(ptr.cast(), core::ptr::null()); },
+                5 => { native_cmd_5(ptr.cast(), core::ptr::null()); native_help_5(ptr.cast(), core::ptr::null()); },
+                6 => { native_cmd_6(ptr.cast(), core::ptr::null()); native_help_6(ptr.cast(), core::ptr::null()); },
+                _ => continue,
+            }
+            item.update_text();
+            skyline::println!("[ELP V10.14] #{} AFTER={:?} UpdateText complete", i, item.command_text.get_string());
+        }
+    }
+}
+
+pub fn install() {
+    skyline::println!("[ELP V10.14] Installing native settings batch refresh (rows 0..6)");
+    skyline::install_hooks!(config_sequence_create_config_menu);
+}

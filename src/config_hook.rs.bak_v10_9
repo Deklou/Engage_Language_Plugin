@@ -1,0 +1,29 @@
+//! V10.9 - Inspect ConfigSequence.m_ConfigObject after the known working hook.
+//! FE Engage 2.0.0. Metadata: ConfigSequence.m_ConfigObject at IL2CPP offset 0x70.
+//! No CreateBind hook, no Unity calls, no writes, no native ConfigMenu pointer cast.
+
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+static CREATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    let n = CREATE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!("[ELP V10.9] CREATE ENTER #{} seq={:p}", n, this);
+    original!()(this, method_info);
+    if this.is_null() {
+        skyline::println!("[ELP V10.9] CREATE EXIT #{} null sequence", n);
+        return;
+    }
+    // `this` points to a live ConfigSequence instance at this point.
+    // The field is a managed Unity GameObject reference; only print it.
+    let object_slot = unsafe { (this as *const u8).add(0x70) as *const *const c_void };
+    let game_object = unsafe { object_slot.read() };
+    skyline::println!("[ELP V10.9] CREATE EXIT #{} config_game_object={:p}", n, game_object);
+}
+
+pub fn install() {
+    skyline::println!("[ELP V10.9] Installing sequence-object capture (CreateConfigMenu only)");
+    skyline::install_hooks!(config_sequence_create_config_menu);
+}

@@ -1,0 +1,57 @@
+//! V10.11 — inspection en lecture seule de la classe du premier enfant de ConfigSequence.
+//! Engage 2.0.0 : ProcInst.m_Child=0x38, ConfigSequence.m_ConfigObject=0x70.
+//! BasicMenu.m_menuItemList=0x78, m_fullMenuItemList=0x80.
+//! Ne lit les tailles des listes que si le type IL2CPP est "ConfigMenu".
+
+use core::ffi::c_void;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use unity::prelude::*;
+use engage::menu::ConfigMenu;
+
+static CREATE_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+#[skyline::hook(offset = 0x253a470)]
+fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
+    let n = CREATE_CALLS.fetch_add(1, Ordering::Relaxed) + 1;
+    skyline::println!("[ELP V10.11] CREATE ENTER #{} seq={:p}", n, this);
+    original!()(this, method_info);
+    if this.is_null() {
+        skyline::println!("[ELP V10.11] CREATE EXIT #{} null sequence", n);
+        return;
+    }
+    unsafe {
+        let seq = this as *const u8;
+        let go = (seq.add(0x70) as *const *const c_void).read();
+        let child = (seq.add(0x38) as *const *const c_void).read();
+        skyline::println!("[ELP V10.11] CREATE EXIT #{} game_object={:p} first_child={:p}", n, go, child);
+        if child.is_null() { return; }
+        // L'en-tête IL2CPP est commun à tous les objets managés.
+        // On ne traite pas l'objet comme un ConfigMenu avant d'avoir contrôlé son nom.
+        let obj = &*(child as *const ConfigMenu<()>);
+        let class_name = obj.get_class().get_name();
+        skyline::println!("[ELP V10.11] FIRST_CHILD class={:?}", class_name);
+        let debug_name = format!("{:?}", class_name);
+        if debug_name != r#""ConfigMenu""# && debug_name != r#"Some("ConfigMenu")"# {
+            skyline::println!("[ELP V10.11] Not ConfigMenu; no list access");
+            return;
+        }
+        let menu = child as *const u8;
+        let visible = (menu.add(0x78) as *const *const c_void).read();
+        let full = (menu.add(0x80) as *const *const c_void).read();
+        skyline::println!("[ELP V10.11] NATIVE LIST PTRS visible={:p} full={:p}", visible, full);
+        // Vérification des limites avant tout parcours : ne lit aucune entrée.
+        if !visible.is_null() {
+            let count = ((visible as *const u8).add(0x18) as *const u32).read();
+            skyline::println!("[ELP V10.11] visible size={}", count);
+        }
+        if !full.is_null() {
+            let count = ((full as *const u8).add(0x18) as *const u32).read();
+            skyline::println!("[ELP V10.11] full size={}", count);
+        }
+    }
+}
+
+pub fn install() {
+    skyline::println!("[ELP V10.11] Installing native menu class identification");
+    skyline::install_hooks!(config_sequence_create_config_menu);
+}
