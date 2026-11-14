@@ -13,6 +13,20 @@ static MESS_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MESS_CAPTURE: Mutex<Option<HashMap<usize, Option<String>>>> = Mutex::new(None);
 static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 
+// Trace the earlier sequence phase, without changing the game's call path.
+// Capture stays active until CreateConfigMenu finishes, including any
+// scheduled intermediate UI setup. The map is capped at 8192 entries.
+#[skyline::hook(offset = 0x253a290)] // ConfigSequence.StartSequence, Engage 2.0.0
+fn config_sequence_start_sequence(this: *mut c_void, method_info: *const c_void) {
+    if let Ok(mut captured) = MESS_CAPTURE.lock() { *captured = Some(HashMap::new()); }
+    MESS_CAPTURE_ACTIVE.store(true, Ordering::Relaxed);
+    skyline::println!("[ELP V10.19] START StartSequence capture");
+    original!()(this, method_info);
+    let count = MESS_CAPTURE.lock().ok()
+        .and_then(|guard| guard.as_ref().map(|m| m.len())).unwrap_or(0);
+    skyline::println!("[ELP V10.19] END StartSequence function; capture continues until CreateConfigMenu (pointers={})", count);
+}
+
 #[skyline::hook(offset = 0x25c9240)] // App.Mess.Get(Il2CppString), Engage 2.0.0
 fn mess_get_capture(label: *const Il2CppString, method_info: *const c_void) -> *const Il2CppString {
     let result = original!()(label, method_info);
@@ -33,6 +47,14 @@ fn mess_get_capture(label: *const Il2CppString, method_info: *const c_void) -> *
                         // the result pointer is known to be valid. No UI writes.
                         let resolved = (&*result).get_string().unwrap_or_default();
                         if resolved.chars().count() <= 180 {
+                            if resolved.contains("Settings")
+                                || resolved.contains("settings")
+                                || resolved.contains("Reset")
+                                || resolved.contains("Adjust")
+                                || key.contains("HEADER")
+                                || key.contains("RESET") {
+                                skyline::println!("[ELP V10.19] HEADER CANDIDATE key={:?} value={:?}", key, resolved);
+                            }
                             skyline::println!(
                                 "[ELP V10.18] MSBT key={:?} value={:?}",
                                 key, resolved
@@ -202,7 +224,13 @@ const TARGET_CLASSES: [&str; 25] = [
 fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
     for item in NATIVE_ITEMS.iter() { item.store(0, Ordering::Relaxed); }
     if let Ok(mut keys) = NATIVE_TITLE_KEYS.lock() { keys.clear(); keys.resize(25, None); }
-    if let Ok(mut captured) = MESS_CAPTURE.lock() { *captured = Some(HashMap::new()); }
+    // StartSequence may have started the capture before CreateConfigMenu.
+    // Preserve those earlier return-pointer/key associations.
+    let early_count = if let Ok(mut captured) = MESS_CAPTURE.lock() {
+        if captured.is_none() { *captured = Some(HashMap::new()); }
+        captured.as_ref().map(|m| m.len()).unwrap_or(0)
+    } else { 0 };
+    skyline::println!("[ELP V10.19] CREATE ENTER: early Mess.Get pointers={}", early_count);
     MESS_CAPTURE_ACTIVE.store(true, Ordering::Relaxed);
     original!()(this, method_info);
     MESS_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
@@ -330,6 +358,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.18] Installing scoped Settings-header MSBT trace (keeps V10.17 refresh)");
-    skyline::install_hooks!(mess_get_capture, config_sequence_create_config_menu);
+    skyline::println!("[ELP V10.19] Installing StartSequence -> CreateConfigMenu MSBT trace (keeps V10.17 refresh)");
+    skyline::install_hooks!(mess_get_capture, config_sequence_start_sequence, config_sequence_create_config_menu);
 }
