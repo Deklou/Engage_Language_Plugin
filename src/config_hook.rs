@@ -51,6 +51,72 @@ unsafe fn elp_trace_ui_transform(node: *const c_void, depth: usize, nodes: &mut 
     }
 }
 
+// V10.21: traverse upwards from ConfigRoot, then inspect siblings in read-only mode.
+// UnityEngine.Transform.get_parent (Engage 2.0.0).
+#[skyline::from_offset(0x37909f0)]
+fn elp_ui_get_parent(transform: *const c_void, mi: *const c_void) -> *const c_void;
+
+fn elp_trace_settings_parent_siblings(seq: *const c_void) {
+    if seq.is_null() { return; }
+    unsafe {
+        let go = ((seq as *const u8).add(0x70) as *const *const c_void).read();
+        if go.is_null() { return; }
+        let mut node = elp_ui_get_transform(go, core::ptr::null());
+        if node.is_null() { return; }
+        skyline::println!("[ELP V10.21] PARENT/SIBLING TRACE BEGIN config_root={:p}", node);
+        // Walk at most four levels; do not revisit previously-seen nodes.
+        let mut visited: [*const c_void; 5] = [core::ptr::null(); 5];
+        visited[0] = node;
+        let mut nodes = 0usize;
+        for level in 1..=4usize {
+            let parent = elp_ui_get_parent(node, core::ptr::null());
+            if parent.is_null() {
+                skyline::println!("[ELP V10.21] reached null parent at level={}", level);
+                break;
+            }
+            if visited[..level].contains(&parent) {
+                skyline::println!("[ELP V10.21] repeated parent at level={}", level);
+                break;
+            }
+            visited[level] = parent;
+            let parent_go = elp_ui_get_game_object(parent, core::ptr::null());
+            if parent_go.is_null() { break; }
+            let name_ptr = elp_ui_get_name(parent_go, core::ptr::null());
+            let name = if name_ptr.is_null() { String::from("<null>") }
+                else { (&*name_ptr).get_string().unwrap_or_default() };
+            let children = elp_ui_get_child_count(parent, core::ptr::null());
+            skyline::println!("[ELP V10.21] PARENT level={} ptr={:p} name={:?} children={}",
+                level, parent, name, children);
+            if children < 0 || children > 2000 { break; }
+            // The first 24 siblings per parent, including the current branch.
+            // Only two levels beneath siblings, to keep this probe bounded.
+            for i in 0..children.min(24) {
+                if nodes >= 360 { break; }
+                let sibling = elp_ui_get_child(parent, i, core::ptr::null());
+                if sibling.is_null() { continue; }
+                let sibling_go = elp_ui_get_game_object(sibling, core::ptr::null());
+                if sibling_go.is_null() { continue; }
+                let sibling_name_ptr = elp_ui_get_name(sibling_go, core::ptr::null());
+                let sibling_name = if sibling_name_ptr.is_null() { String::from("<null>") }
+                    else { (&*sibling_name_ptr).get_string().unwrap_or_default() };
+                skyline::println!("[ELP V10.21] SIBLING parent_level={} idx={} current={} name={:?}",
+                    level, i, sibling == node, sibling_name);
+                if sibling != node {
+                    // The V10.20 helper stops at depth>7; starting at 6 gives
+                    // sibling + direct children without exploring all scene objects.
+                    elp_trace_ui_transform(sibling, 6, &mut nodes);
+                }
+            }
+            node = parent;
+            if nodes >= 360 {
+                skyline::println!("[ELP V10.21] node cap reached");
+                break;
+            }
+        }
+        skyline::println!("[ELP V10.21] PARENT/SIBLING TRACE END nodes={}", nodes);
+    }
+}
+
 fn elp_trace_settings_ui_tree(seq: *const c_void) {
     if seq.is_null() { return; }
     unsafe {
@@ -291,6 +357,7 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
     original!()(this, method_info);
     MESS_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
     elp_trace_settings_ui_tree(this);
+    elp_trace_settings_parent_siblings(this);
     if this.is_null() { return; }
     unsafe {
         let child = ((this as *const u8).add(0x38) as *const *const c_void).read();
@@ -415,6 +482,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.20] Installing Settings UI hierarchy trace (keeps V10.17 refresh)");
+    skyline::println!("[ELP V10.21] Installing parent/sibling Settings UI trace (keeps V10.17 refresh)");
     skyline::install_hooks!(mess_get_capture, config_sequence_start_sequence, config_sequence_create_config_menu);
 }
