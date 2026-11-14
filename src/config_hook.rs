@@ -12,6 +12,8 @@ use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
 static MESS_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MESS_CAPTURE: Mutex<Option<HashMap<usize, Option<String>>>> = Mutex::new(None);
 static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
+// V10.24: ConfigSequence of the current Settings screen; replaced at creation.
+static SETTINGS_TITLEBAR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 // Trace the earlier sequence phase, without changing the game's call path.
 // Capture stays active until CreateConfigMenu finishes, including any
@@ -209,6 +211,76 @@ unsafe fn elp_tmp_probe(go: *const c_void, slot: i32, role: &str) {
         skyline::println!("[ELP V10.23] COMPONENT slot={} role={} go={:p} lookup={} ptr={:p}",
             slot, role, go, class_name, component);
         if !component.is_null() { break; }
+    }
+}
+
+// V10.24: TMPro.TMP_Text.SetText(string, bool), native (non-virtual) IL2CPP
+// overload, offset confirmed in DivineDragonFanClub/engage-il2cpp for 2.0.0.
+// Calling the public SetText overload instead of writing TMP_Text.m_text.
+#[skyline::from_offset(0x2837690)]
+fn elp_tmp_set_text_2(component: *const c_void, text: *const Il2CppString,
+    sync_text_input_box: bool, mi: *const c_void);
+
+pub fn refresh_settings_titlebar() {
+    let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
+    if seq.is_null() {
+        skyline::println!("[ELP V10.24] SKIP no Settings sequence");
+        return;
+    }
+    // Resolve translations *after* Mess.Reload. These are the known MSBT keys.
+    let title_key: &'static Il2CppString = "MID_MENU_CONFIG".into();
+    let help_key: &'static Il2CppString = "MID_MENU_CONFIG_HELP".into();
+    let title = unsafe { crate::interface::get_message(title_key) };
+    let help = unsafe { crate::interface::get_message(help_key) };
+    let title_value = title.get_string().unwrap_or_default();
+    let help_value = help.get_string().unwrap_or_default();
+    if title_value.is_empty() || help_value.is_empty()
+        || title_value == "MID_MENU_CONFIG" || help_value == "MID_MENU_CONFIG_HELP" {
+        skyline::println!("[ELP V10.24] SKIP unresolved MSBT title={:?} help={:?}",
+            title_value, help_value);
+        return;
+    }
+    unsafe {
+        let config_go = ((seq as *const u8).add(0x70) as *const *const c_void).read();
+        if config_go.is_null() { skyline::println!("[ELP V10.24] SKIP null ConfigRoot"); return; }
+        let root = elp_ui_get_transform(config_go, core::ptr::null());
+        if root.is_null() { return; }
+        let game_ui = elp_ui_get_parent(root, core::ptr::null());
+        let titlebar = elp_tmp_child(game_ui, "TitleBarRootCanvas");
+        let content_root = elp_tmp_child(titlebar, "ContentTitleRoot(Clone)");
+        let all = elp_tmp_child(content_root, "ContentsTitleAll");
+        let content = elp_tmp_child(all, "ContentTitle");
+        if content.is_null() {
+            skyline::println!("[ELP V10.24] SKIP TitleBar path missing");
+            return;
+        }
+        let type_name: &'static Il2CppString = "TextMeshProUGUI".into();
+        let mut written = 0;
+        // Update both animation slots to prevent an old English title returning.
+        for slot in 0..2 {
+            let part = elp_tmp_child(content,
+                if slot == 0 { "ContentTitle0" } else { "ContentTitle1" });
+            let title_help = elp_tmp_child(part, "TitleHelp");
+            for (role, value) in [("Title", title), ("Help", help)].iter() {
+                let node = elp_tmp_child(title_help, role);
+                if node.is_null() { continue; }
+                let go = elp_ui_get_game_object(node, core::ptr::null());
+                if go.is_null() { continue; }
+                let component = elp_tmp_get_component_by_name(go,
+                    type_name as *const Il2CppString, core::ptr::null());
+                if component.is_null() {
+                    skyline::println!("[ELP V10.24] MISSING slot={} role={}", slot, role);
+                    continue;
+                }
+                elp_tmp_set_text_2(component, *value as *const Il2CppString,
+                    false, core::ptr::null());
+                written += 1;
+                skyline::println!("[ELP V10.24] SET slot={} role={} component={:p} value={:?}",
+                    slot, role, component,
+                    if *role == "Title" { &title_value } else { &help_value });
+            }
+        }
+        skyline::println!("[ELP V10.24] DONE written={}/4", written);
     }
 }
 
@@ -485,6 +557,7 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
     // V10.23: replaced broad probe: elp_trace_settings_ui_tree(this);
     // V10.23: replaced broad probe: elp_trace_settings_parent_siblings(this);
     // V10.23: replaced broad probe: elp_trace_titlebar_from_config(this);
+    SETTINGS_TITLEBAR_SEQUENCE.store(this as usize, Ordering::Relaxed);
     elp_trace_titlebar_tmp_components(this);
     if this.is_null() { return; }
     unsafe {
@@ -610,6 +683,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.23] Installing focused TMP-component trace (keeps V10.17 refresh)");
+    skyline::println!("[ELP V10.24] Installing live Settings titlebar translation (keeps V10.17 refresh)");
     skyline::install_hooks!(mess_get_capture, config_sequence_start_sequence, config_sequence_create_config_menu);
 }

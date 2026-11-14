@@ -190,6 +190,7 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
             let after = get_message(label).get_string().unwrap_or_default();
             skyline::println!("[ELP V10.2] AFTER lang={} text={}", get_current_language(), after);
             crate::config_hook::refresh_native_settings();
+            crate::config_hook::refresh_settings_titlebar();
             CURRENT_MENU_ITEM.with(|item| {
                 if let Some(menu_item) = *item.borrow() {
                     // The current entry is already handled by update_texts.
