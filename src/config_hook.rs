@@ -27,7 +27,21 @@ fn mess_get_capture(label: *const Il2CppString, method_info: *const c_void) -> *
                 if map.len() >= 8192 { return result; }
                 use std::collections::hash_map::Entry;
                 match map.entry(result as usize) {
-                    Entry::Vacant(v) => { v.insert(Some(key)); }
+                    Entry::Vacant(v) => {
+                        // During menu creation only, log the MSBT key and original
+                        // visible string together. This is the first place where
+                        // the result pointer is known to be valid. No UI writes.
+                        let resolved = (&*result).get_string().unwrap_or_default();
+                        if resolved.chars().count() <= 180 {
+                            skyline::println!(
+                                "[ELP V10.18] MSBT key={:?} value={:?}",
+                                key, resolved
+                            );
+                        } else {
+                            skyline::println!("[ELP V10.18] MSBT key={:?} value=<long>", key);
+                        }
+                        v.insert(Some(key));
+                    }
                     Entry::Occupied(mut o) => {
                         if o.get().as_ref() != Some(&key) { o.insert(None); }
                     }
@@ -228,6 +242,7 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
         if let Ok(mut captured) = MESS_CAPTURE.lock() {
             let n = captured.as_ref().map(|m| m.len()).unwrap_or(0);
             skyline::println!("[ELP V10.17] captured Mess.Get unique return pointers={}", n);
+            skyline::println!("[ELP V10.18] END Settings-build MSBT trace (unique pointers={})", n);
             *captured = None;
         }
         skyline::println!("[ELP V10.15] captured up to 25 native rows, list size={}", size);
@@ -315,6 +330,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.17] Installing Mess.Get title-key capture + native refresh");
+    skyline::println!("[ELP V10.18] Installing scoped Settings-header MSBT trace (keeps V10.17 refresh)");
     skyline::install_hooks!(mess_get_capture, config_sequence_create_config_menu);
 }
