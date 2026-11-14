@@ -171,6 +171,12 @@ extern "C" fn a_button_confirm(this: &mut ConfigBasicMenuItem, _method_info: Opt
 impl TwoChoiceDialogMethods for LanguageConfirmation {
     extern "C" fn on_first_choice(_this: &mut BasicDialogItemYes, _method_info: OptionalMethod) -> BasicMenuResult {
         unsafe {
+            // V9: inspect the direct parent before SetLanguage/ReloadMessages.
+            CURRENT_MENU_ITEM.with(|item| {
+                if let Some(menu_item) = *item.borrow() {
+                    capture_v9_parent(&*menu_item);
+                }
+            });
             set_language(PREVIEW_LANG);
             CURRENT_LANG = PREVIEW_LANG;
             reflect_language_setting();
@@ -191,27 +197,44 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
 // Experimental refresh of the currently open configuration menu.
 // This deliberately does not walk parent menus or recreate menus while
 // a confirmation dialog is closing.
+// V4 diagnostic: determine whether this callback really reaches other config items.
+// Test only. Does not attempt to translate other settings yet.
+// V5 diagnostic: does InitContent actually repopulate already-instantiated text fields?
+// V6 diagnostic: direct non-virtual IL2CPP method lookup on derived setting class.
+// V5 proved InitContent does not reset title or command for the existing item.
+// V8: pointer-only diagnostic. NO DEREFERENCE OF PARENT PROCESSES.
+// Can be installed directly over V7. No intermediate restore needed.
+thread_local! {
+    static V9_PARENT_CLASS: RefCell<String> = RefCell::new(String::from("NOT READ"));
+}
+
+// This test reads exactly one parent before the language resources reload.
+// Unlike V7, it does not walk the parent chain after reload_messages().
+fn capture_v9_parent(current_item: &ConfigBasicMenuItem) {
+    let info = match current_item.menu.proc.parent.as_ref() {
+        None => "NONE".to_string(),
+        Some(parent) => {
+            // V9 risk boundary: dereferencing the direct parent to read its class.
+            // If this crashes, parent inspection itself is unsafe on this runtime.
+            parent.get_class().get_name()
+        }
+    };
+    V9_PARENT_CLASS.with(|cell| *cell.borrow_mut() = info);
+}
+
 fn refresh_config_menu(current_item: &mut ConfigBasicMenuItem) {
-    // The player's new language is already applied and the message files reloaded.
-    // Refresh our custom menu entry, then reinitialize other config items.
     update_texts(current_item);
     let current_ptr = current_item as *const ConfigBasicMenuItem;
-
-    // Each game setting subclass overrides InitContent (vtable slot 27).
-    // Unlike UpdateText, this also rebuilds m_TitleText from current messages.
+    let parent_name = V9_PARENT_CLASS.with(|cell| cell.borrow().clone());
+    let mut marked = false;
     for entry in current_item.menu.full_menu_item_list.iter_mut() {
         let entry: &mut ConfigBasicMenuItem = &mut **entry;
-        if std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
+        if marked || std::ptr::eq(entry as *const ConfigBasicMenuItem, current_ptr) {
             continue;
         }
-
-        unsafe {
-            if let Some(method) = entry.get_class().get_virtual_method("InitContent") {
-                let init: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
-                    std::mem::transmute(method.method_info.method_ptr);
-                init(entry, method.method_info);
-            }
-        }
+        marked = true;
+        entry.title_text = "V9 PARENT CLASS".into();
+        entry.command_text = parent_name.as_str().into();
         entry.update_text();
     }
 }
