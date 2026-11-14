@@ -16,6 +16,62 @@ static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 // Trace the earlier sequence phase, without changing the game's call path.
 // Capture stays active until CreateConfigMenu finishes, including any
 // scheduled intermediate UI setup. The map is capped at 8192 entries.
+// V10.20: read-only inspection scoped to ConfigSequence.m_ConfigObject.
+// All offsets from engage-il2cpp, Engage 2.0.0. No Unity object mutation.
+#[skyline::from_offset(0x2c4e880)] // UnityEngine.GameObject.get_transform
+fn elp_ui_get_transform(go: *const c_void, mi: *const c_void) -> *const c_void;
+#[skyline::from_offset(0x37925a0)] // UnityEngine.Transform.get_childCount
+fn elp_ui_get_child_count(transform: *const c_void, mi: *const c_void) -> i32;
+#[skyline::from_offset(0x3792d40)] // UnityEngine.Transform.GetChild
+fn elp_ui_get_child(transform: *const c_void, index: i32, mi: *const c_void) -> *const c_void;
+#[skyline::from_offset(0x2c46490)] // UnityEngine.Component.get_gameObject
+fn elp_ui_get_game_object(component: *const c_void, mi: *const c_void) -> *const c_void;
+#[skyline::from_offset(0x32e8e90)] // UnityEngine.Object.get_name
+fn elp_ui_get_name(obj: *const c_void, mi: *const c_void) -> *const Il2CppString;
+
+unsafe fn elp_trace_ui_transform(node: *const c_void, depth: usize, nodes: &mut usize) {
+    if node.is_null() || depth > 7 || *nodes >= 240 { return; }
+    *nodes += 1;
+    let go = elp_ui_get_game_object(node, core::ptr::null());
+    if go.is_null() { return; }
+    let name_ptr = elp_ui_get_name(go, core::ptr::null());
+    let name = if name_ptr.is_null() { String::from("<null>") }
+        else { (&*name_ptr).get_string().unwrap_or_default() };
+    let raw_count = elp_ui_get_child_count(node, core::ptr::null());
+    if raw_count < 0 || raw_count > 2000 {
+        skyline::println!("[ELP V10.20] invalid child count depth={} name={:?} count={}", depth, name, raw_count);
+        return;
+    }
+    skyline::println!("[ELP V10.20] UI depth={} node={:p} go={:p} children={} name={:?}", depth, node, go, raw_count, name);
+    // Cap per parent and overall count; diagnostic intentionally incomplete on huge trees.
+    for i in 0..raw_count.min(80) {
+        if *nodes >= 240 { break; }
+        let child = elp_ui_get_child(node, i, core::ptr::null());
+        elp_trace_ui_transform(child, depth + 1, nodes);
+    }
+}
+
+fn elp_trace_settings_ui_tree(seq: *const c_void) {
+    if seq.is_null() { return; }
+    unsafe {
+        // ConfigSequence.m_ConfigObject is a GameObject at IL2CPP offset 0x70.
+        let go = ((seq as *const u8).add(0x70) as *const *const c_void).read();
+        if go.is_null() {
+            skyline::println!("[ELP V10.20] ConfigSequence.m_ConfigObject=NULL");
+            return;
+        }
+        let root = elp_ui_get_transform(go, core::ptr::null());
+        if root.is_null() {
+            skyline::println!("[ELP V10.20] ConfigSequence GameObject has no Transform");
+            return;
+        }
+        skyline::println!("[ELP V10.20] SETTINGS UI TREE BEGIN game_object={:p}", go);
+        let mut nodes = 0usize;
+        elp_trace_ui_transform(root, 0, &mut nodes);
+        skyline::println!("[ELP V10.20] SETTINGS UI TREE END nodes_logged={}", nodes);
+    }
+}
+
 #[skyline::hook(offset = 0x253a290)] // ConfigSequence.StartSequence, Engage 2.0.0
 fn config_sequence_start_sequence(this: *mut c_void, method_info: *const c_void) {
     if let Ok(mut captured) = MESS_CAPTURE.lock() { *captured = Some(HashMap::new()); }
@@ -234,6 +290,7 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
     MESS_CAPTURE_ACTIVE.store(true, Ordering::Relaxed);
     original!()(this, method_info);
     MESS_CAPTURE_ACTIVE.store(false, Ordering::Relaxed);
+    elp_trace_settings_ui_tree(this);
     if this.is_null() { return; }
     unsafe {
         let child = ((this as *const u8).add(0x38) as *const *const c_void).read();
@@ -358,6 +415,6 @@ pub fn refresh_native_settings() {
 }
 
 pub fn install() {
-    skyline::println!("[ELP V10.19] Installing StartSequence -> CreateConfigMenu MSBT trace (keeps V10.17 refresh)");
+    skyline::println!("[ELP V10.20] Installing Settings UI hierarchy trace (keeps V10.17 refresh)");
     skyline::install_hooks!(mess_get_capture, config_sequence_start_sequence, config_sequence_create_config_menu);
 }
