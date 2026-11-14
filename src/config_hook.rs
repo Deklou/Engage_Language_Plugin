@@ -161,7 +161,7 @@ fn elp_trace_titlebar_from_config(seq: *const c_void) {
             if sibling_go.is_null() { continue; }
             let p = elp_ui_get_name(sibling_go, core::ptr::null());
             if p.is_null() { continue; }
-            if (&*p).get_string().as_deref() != Some("TitleBarRootCanvas") { continue; }
+            if !matches!((&*p).get_string().as_deref(), Ok("TitleBarRootCanvas")) { continue; }
             found = true;
             skyline::println!("[ELP V10.22] TITLEBAR BEGIN sibling_index={} root={:p}", i, sibling);
             let mut nodes = 0usize;
