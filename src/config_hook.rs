@@ -12,14 +12,6 @@ use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
 static MESS_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MESS_CAPTURE: Mutex<Option<HashMap<usize, Option<String>>>> = Mutex::new(None);
 static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
-// V10.27 experimental: any row not captured as a native setting. Snapshot identity and
-// the exact Mess.Get key when it exists; never guess a key from visible text.
-struct ExtraSettingsRow {
-    ptr: usize,
-    class_name: String,
-    title_key: Option<String>,
-}
-static EXTRA_SETTINGS_ROWS: Mutex<Vec<ExtraSettingsRow>> = Mutex::new(Vec::new());
 // V10.24: ConfigSequence of the current Settings screen; replaced at creation.
 static SETTINGS_TITLEBAR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
@@ -589,7 +581,6 @@ const TARGET_CLASSES: [&str; 25] = [
 #[skyline::hook(offset = 0x253a470)]
 fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
     for item in NATIVE_ITEMS.iter() { item.store(0, Ordering::Relaxed); }
-    if let Ok(mut extra) = EXTRA_SETTINGS_ROWS.lock() { extra.clear(); }
     if let Ok(mut keys) = NATIVE_TITLE_KEYS.lock() { keys.clear(); keys.resize(25, None); }
     // StartSequence may have started the capture before CreateConfigMenu.
     // Preserve those earlier return-pointer/key associations.
@@ -639,36 +630,13 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
             }
             skyline::println!("[ELP V10.17] TITLE #{} class={} key={:?} current={:?}", i, expected, key, before);
         }
-        // Third-party extensions may insert or append ConfigBasicMenuItem rows.
-        // Compare actual pointers, not plugin names or fixed list positions.
-        if let Ok(mut extra) = EXTRA_SETTINGS_ROWS.lock() {
-            for (i, entry) in list.iter().enumerate().take(128) {
-                let ptr = *entry as *const ConfigBasicMenuItem;
-                if ptr.is_null() { continue; }
-                if NATIVE_ITEMS.iter().any(|native| native.load(Ordering::Relaxed) == ptr as usize) {
-                    continue;
-                }
-                let class_name = format!("{:?}", entry.get_class().get_name());
-                let title_ptr = (&*ptr).title_text as *const Il2CppString as usize;
-                let title_key = MESS_CAPTURE.lock().ok().and_then(|guard| {
-                    guard.as_ref().and_then(|map| map.get(&title_ptr).cloned()).flatten()
-                });
-                skyline::println!("[ELP V10.27] EXTRA #{} class={} msbt_key={:?}",
-                    i, class_name, title_key);
-                extra.push(ExtraSettingsRow {
-                    ptr: ptr as usize,
-                    class_name,
-                    title_key,
-                });
-            }
-        }
         if let Ok(mut captured) = MESS_CAPTURE.lock() {
             let n = captured.as_ref().map(|m| m.len()).unwrap_or(0);
             skyline::println!("[ELP V10.17] captured Mess.Get unique return pointers={}", n);
             skyline::println!("[ELP V10.18] END Settings-build MSBT trace (unique pointers={})", n);
             *captured = None;
         }
-        skyline::println!("[ELP V10.15] captured up to 25 native rows, list size={}", size);
+        skyline::println!("[ELP V10.27b] captured 25 native rows, list size={}", size);
     }
 }
 
@@ -751,45 +719,55 @@ pub fn refresh_native_settings() {
         }
     }
 
-    // V10.27: refresh non-native entries via their *own* virtual setters.
-    // Plugins installed later can override these without changes to our code.
-    // Only touch rows whose identity still matches the captured menu.
-    if let Ok(rows) = EXTRA_SETTINGS_ROWS.lock() {
-        for (i, row) in rows.iter().enumerate() {
-            let ptr = row.ptr as *mut ConfigBasicMenuItem;
-            if ptr.is_null() { continue; }
-            unsafe {
-                let item = &mut *ptr;
-                let class_name = format!("{:?}", item.get_class().get_name());
-                if class_name != row.class_name {
-                    skyline::println!("[ELP V10.27] EXTRA #{} identity changed; skip", i);
-                    continue;
-                }
-                // Update the title only with a proven MSBT mapping. Plugin titles
-                // created from arbitrary literal strings have no generic key.
-                if let Some(ref key) = row.title_key {
-                    let label: &'static Il2CppString = key.as_str().into();
-                    let translated = crate::interface::get_message(label);
-                    let value = translated.get_string().unwrap_or_default();
-                    if !value.is_empty() && value != *key {
-                        item.title_text = translated;
-                    }
-                }
-
-                // These virtual methods are the same extension points used by
-                // engage::menu::config::{new_switch,new_gauge,new_command}.
-                // Do not invoke CustomCall, ACall, or selection handlers.
-                for method_name in ["SetCommandText", "SetHelpText"] {
-                    if let Some(method) = item.get_class().get_virtual_method(method_name) {
-                        let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
-                            std::mem::transmute(method.method_info.method_ptr);
-                        invoke(item, method.method_info);
-                    }
-                }
-                item.update_text();
-                skyline::println!("[ELP V10.27] EXTRA #{} refreshed class={}", i, class_name);
-            }
+    // V10.27b: no persistent extra-row cache or additional mutexes.
+    // The first test crashed in the Settings creation hook immediately after
+    // capturing three plugin rows, before any language switch. Inspect live
+    // rows only when the user actually triggers a language refresh.
+    let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
+    if seq.is_null() {
+        skyline::println!("[ELP V10.27b] SKIP no active Settings sequence");
+        return;
+    }
+    unsafe {
+        let child = ((seq as *const u8).add(0x38) as *const *const c_void).read();
+        if child.is_null() { return; }
+        let menu = &*(child as *const ConfigMenu<()>);
+        let menu_class = format!("{:?}", menu.get_class().get_name());
+        if menu_class != r#""ConfigMenu""# && menu_class != r#"Some("ConfigMenu")"# {
+            return;
         }
+        let full = ((child as *const u8).add(0x80) as *const *const List<ConfigBasicMenuItem>).read();
+        if full.is_null() { return; }
+        let list = &*full;
+        let size = list.len();
+        if size < 25 || size > list.capacity() || size > 128 { return; }
+        let mut refreshed = 0usize;
+        for (index, entry) in list.iter().enumerate().take(128) {
+            let ptr = *entry as *mut ConfigBasicMenuItem;
+            if ptr.is_null() { continue; }
+            // Work with additions at any position. The 25 native rows
+            // are already updated by the existing stable code above.
+            if NATIVE_ITEMS.iter().any(|native| {
+                native.load(Ordering::Relaxed) == ptr as usize
+            }) {
+                continue;
+            }
+            let item = &mut *ptr;
+            let class_name = format!("{:?}", item.get_class().get_name());
+            // Plugins own these setters. Do not infer translation keys from
+            // their displayed strings or call state-changing actions.
+            for method_name in ["SetCommandText", "SetHelpText"] {
+                if let Some(method) = item.get_class().get_virtual_method(method_name) {
+                    let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
+                        std::mem::transmute(method.method_info.method_ptr);
+                    invoke(item, method.method_info);
+                }
+            }
+            item.update_text();
+            refreshed += 1;
+            skyline::println!("[ELP V10.27b] EXTRA #{} refreshed class={}", index, class_name);
+        }
+        skyline::println!("[ELP V10.27b] DONE refreshed={} total_rows={}", refreshed, size);
     }
 }
 
