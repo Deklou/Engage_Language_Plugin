@@ -767,7 +767,7 @@ pub fn refresh_native_settings() {
     // V10.27h: bounded traversal, then translate from an extendable text
     // catalog. This intentionally avoids attempting to call Cobalt's Rust
     // construction-only callbacks as if they were virtual IL2CPP methods.
-    let locale_is_french = match crate::interface::get_current_language() {
+    let locale_is_french = match unsafe { crate::interface::get_current_language() } {
         5 => Some(true),
         1 | 4 => Some(false),
         _ => None,
