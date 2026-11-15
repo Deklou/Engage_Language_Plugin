@@ -825,8 +825,8 @@ pub fn refresh_map_system_menus() {
             );
 
             if role == "ROOT" {
-                let content_ptr = menu.menu_content as *const engage::menu::BasicMenuContent
-                    as *const c_void;
+                let content_ptr = (&*menu.menu_content)
+                    as *const engage::menu::BasicMenuContent as *const c_void;
                 if !content_ptr.is_null() {
                     let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
                     if content.get_class().get_name() == "SortieTopMenuContent" {
