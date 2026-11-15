@@ -751,21 +751,43 @@ pub fn refresh_native_settings() {
             }
             let item = &mut *ptr;
             let class_name = format!("{:?}", item.get_class().get_name());
-            // Re-run the same virtual text providers that Engage mod items use.
-            // Never call plugin action handlers (CustomCall, ACall, etc.).
+            // V10.27g diagnostics: Cobalt has built-in French translations,
+            // but the already-created rows still display English after refresh.
+            // Compare live item fields before/after the registered virtual calls.
+            let before_title = item.title_text.get_string().unwrap_or_default();
+            let before_command = item.command_text.get_string().unwrap_or_default();
+            let before_help = item.help_text.get_string().unwrap_or_default();
+            skyline::println!(
+                "[ELP V10.27g] BEFORE #{} class={} title={:?} cmd={:?} help={:?}",
+                index, class_name, before_title, before_command, before_help
+            );
+            // Re-run virtual text providers; NEVER invoke plugin action handlers.
             for method_name in ["SetCommandText", "SetHelpText"] {
                 if let Some(method) = item.get_class().get_virtual_method(method_name) {
+                    skyline::println!(
+                        "[ELP V10.27g] METHOD #{} {} ptr={:p}",
+                        index, method_name, method.method_info.method_ptr
+                    );
                     let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
                         std::mem::transmute(method.method_info.method_ptr);
                     invoke(item, method.method_info);
+                } else {
+                    skyline::println!("[ELP V10.27g] METHOD #{} {} MISSING", index, method_name);
                 }
             }
+            let after_title = item.title_text.get_string().unwrap_or_default();
+            let after_command = item.command_text.get_string().unwrap_or_default();
+            let after_help = item.help_text.get_string().unwrap_or_default();
+            skyline::println!(
+                "[ELP V10.27g] AFTER #{} title={:?} cmd={:?} help={:?}",
+                index, after_title, after_command, after_help
+            );
             item.update_text();
             refreshed += 1;
-            skyline::println!("[ELP V10.27f] EXTRA #{} refreshed class={}", index, class_name);
+            skyline::println!("[ELP V10.27g] EXTRA #{} refreshed class={}", index, class_name);
         }
         skyline::println!(
-            "[ELP V10.27f] REFRESH DONE total={} native_cached={} extra_refreshed={}",
+            "[ELP V10.27g] REFRESH DONE total={} native_cached={} extra_refreshed={}",
             size,
             NATIVE_ITEMS.iter().filter(|p| p.load(Ordering::Relaxed) != 0).count(),
             refreshed
