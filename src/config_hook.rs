@@ -714,8 +714,8 @@ fn elp_probe_map_system_parents(seq_ptr: *const c_void) {
                 continue;
             }
             skyline::println!(
-                "[ELP V10.28a] {} FOUND size={} cap={} select={} scroll={}",
-                role, size, capacity, menu.select_index, menu.scroll_index
+                "[ELP V10.28a] {} FOUND size={} cap={}",
+                role, size, capacity
             );
             for (index, entry) in list.iter().take(size).enumerate() {
                 let item_name = format!("{:?}", entry.get_class().get_name());
