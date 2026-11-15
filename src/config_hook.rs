@@ -738,16 +738,26 @@ pub fn refresh_native_settings() {
         let list = &*full;
         let size = list.len();
         if size < 25 || size > list.capacity() || size > 128 { return; }
+        // V10.27e: record unmatched *positions* without dereferencing
+        // individual items, reflecting on plugin classes or invoking setters.
+        // This identifies the four unexpected mismatches in the 28-row menu.
         let mut extras = 0usize;
-        for entry in list.iter().take(128) {
+        let mut mismatch_mask = 0u128;
+        for (index, entry) in list.iter().take(128).enumerate() {
             let ptr = *entry as *const ConfigBasicMenuItem as usize;
             if ptr == 0 { continue; }
             if NATIVE_ITEMS.iter().any(|native| native.load(Ordering::Relaxed) == ptr) {
                 continue;
             }
             extras += 1;
+            mismatch_mask |= 1u128 << index;
         }
-        skyline::println!("[ELP V10.27d] COUNT DONE total={} extra={}", size, extras);
+        let native_cached = NATIVE_ITEMS.iter()
+            .filter(|p| p.load(Ordering::Relaxed) != 0).count();
+        skyline::println!(
+            "[ELP V10.27e] MATCH DONE total={} native_cached={} unmatched={} mask={:#034x}",
+            size, native_cached, extras, mismatch_mask
+        );
     }
 }
 
