@@ -719,15 +719,12 @@ pub fn refresh_native_settings() {
         }
     }
 
-    // V10.27c: read-only diagnostic after the V10.27b crash on language switch.
-    // Do not call third-party virtual setters or BuildText yet; their ABI and
-    // side effects are not proven safe for these three plugin-specific classes.
-    // This lets us isolate the crash without changing the stable native refresh.
+    // V10.27d: isolate diagnostic-induced crash. Count extra rows only.
+    // V10.27c crashed even with plugin callbacks disabled, right after
+    // GetClass/println on the final third-party entry. No reflection or
+    // per-entry formatting in this diagnostic pass.
     let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
-    if seq.is_null() {
-        skyline::println!("[ELP V10.27c] SKIP no active Settings sequence");
-        return;
-    }
+    if seq.is_null() { return; }
     unsafe {
         let child = ((seq as *const u8).add(0x38) as *const *const c_void).read();
         if child.is_null() { return; }
@@ -741,20 +738,16 @@ pub fn refresh_native_settings() {
         let list = &*full;
         let size = list.len();
         if size < 25 || size > list.capacity() || size > 128 { return; }
-        let mut observed = 0usize;
-        for (index, entry) in list.iter().enumerate().take(128) {
-            let ptr = *entry as *const ConfigBasicMenuItem;
-            if ptr.is_null() { continue; }
-            if NATIVE_ITEMS.iter().any(|native| {
-                native.load(Ordering::Relaxed) == ptr as usize
-            }) {
+        let mut extras = 0usize;
+        for entry in list.iter().take(128) {
+            let ptr = *entry as *const ConfigBasicMenuItem as usize;
+            if ptr == 0 { continue; }
+            if NATIVE_ITEMS.iter().any(|native| native.load(Ordering::Relaxed) == ptr) {
                 continue;
             }
-            let class_name = format!("{:?}", entry.get_class().get_name());
-            observed += 1;
-            skyline::println!("[ELP V10.27c] OBSERVE EXTRA #{} class={}", index, class_name);
+            extras += 1;
         }
-        skyline::println!("[ELP V10.27c] DONE observed={} total_rows={}", observed, size);
+        skyline::println!("[ELP V10.27d] COUNT DONE total={} extra={}", size, extras);
     }
 }
 
