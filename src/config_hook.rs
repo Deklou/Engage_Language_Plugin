@@ -719,10 +719,10 @@ pub fn refresh_native_settings() {
         }
     }
 
-    // V10.27d: isolate diagnostic-induced crash. Count extra rows only.
-    // V10.27c crashed even with plugin callbacks disabled, right after
-    // GetClass/println on the final third-party entry. No reflection or
-    // per-entry formatting in this diagnostic pass.
+    // V10.27f: the List's backing-array iterator visits its 32 slots,
+    // even though the current menu has only 28 valid entries. All previous
+    // diagnostics accidentally traversed the unused slots 28..31.
+    // Always bound iteration by list.len(), NEVER capacity or a fixed cap.
     let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
     if seq.is_null() { return; }
     unsafe {
@@ -738,25 +738,37 @@ pub fn refresh_native_settings() {
         let list = &*full;
         let size = list.len();
         if size < 25 || size > list.capacity() || size > 128 { return; }
-        // V10.27e: record unmatched *positions* without dereferencing
-        // individual items, reflecting on plugin classes or invoking setters.
-        // This identifies the four unexpected mismatches in the 28-row menu.
-        let mut extras = 0usize;
-        let mut mismatch_mask = 0u128;
-        for (index, entry) in list.iter().take(128).enumerate() {
-            let ptr = *entry as *const ConfigBasicMenuItem as usize;
-            if ptr == 0 { continue; }
-            if NATIVE_ITEMS.iter().any(|native| native.load(Ordering::Relaxed) == ptr) {
+        let mut refreshed = 0usize;
+        for (index, entry) in list.iter().take(size).enumerate() {
+            let ptr = (*entry as *const ConfigBasicMenuItem).cast_mut();
+            if ptr.is_null() { continue; }
+            // Native entries remain handled by the existing stable loop.
+            // Detect third-party rows by pointer, not their names or indices.
+            if NATIVE_ITEMS.iter().any(|native| {
+                native.load(Ordering::Relaxed) == ptr as usize
+            }) {
                 continue;
             }
-            extras += 1;
-            mismatch_mask |= 1u128 << index;
+            let item = &mut *ptr;
+            let class_name = format!("{:?}", item.get_class().get_name());
+            // Re-run the same virtual text providers that Engage mod items use.
+            // Never call plugin action handlers (CustomCall, ACall, etc.).
+            for method_name in ["SetCommandText", "SetHelpText"] {
+                if let Some(method) = item.get_class().get_virtual_method(method_name) {
+                    let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
+                        std::mem::transmute(method.method_info.method_ptr);
+                    invoke(item, method.method_info);
+                }
+            }
+            item.update_text();
+            refreshed += 1;
+            skyline::println!("[ELP V10.27f] EXTRA #{} refreshed class={}", index, class_name);
         }
-        let native_cached = NATIVE_ITEMS.iter()
-            .filter(|p| p.load(Ordering::Relaxed) != 0).count();
         skyline::println!(
-            "[ELP V10.27e] MATCH DONE total={} native_cached={} unmatched={} mask={:#034x}",
-            size, native_cached, extras, mismatch_mask
+            "[ELP V10.27f] REFRESH DONE total={} native_cached={} extra_refreshed={}",
+            size,
+            NATIVE_ITEMS.iter().filter(|p| p.load(Ordering::Relaxed) != 0).count(),
+            refreshed
         );
     }
 }
