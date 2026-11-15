@@ -733,6 +733,9 @@ fn elp_probe_map_system_parents(seq_ptr: *const c_void) {
 // Confirmed by Ghidra, Engage v2.0.0: App.InfoUtil.TrySetText(TMP, string)
 // at 0x710290f0a0; SortieTopMenuContent.UpdateInfo(bool) at 0x71024ec450.
 // Unlike Build/OnSelect, these do not recreate or reselect menu entries.
+#[skyline::from_offset(0x2467490)]
+fn elp_map_build_content_text(content: *const c_void, mi: *const c_void);
+
 #[skyline::from_offset(0x290f0a0)]
 fn elp_map_try_set_help_text(tmp: *const c_void, value: *const Il2CppString, mi: *const c_void);
 
@@ -793,7 +796,7 @@ pub fn refresh_map_system_menus() {
                 }
                 // The game's normal BuildText calls the item's *virtual*
                 // GetName, which re-resolves MSBT in the selected language.
-                item.rebuild_text();
+                elp_map_build_content_text(content_ptr, core::ptr::null());
                 names += 1;
 
                 let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
@@ -825,8 +828,7 @@ pub fn refresh_map_system_menus() {
             );
 
             if role == "ROOT" {
-                let content_ptr = (&*menu.menu_content)
-                    as *const engage::menu::BasicMenuContent as *const c_void;
+                let content_ptr = menu.menu_content as *const c_void;
                 if !content_ptr.is_null() {
                     let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
                     if content.get_class().get_name() == "SortieTopMenuContent" {
