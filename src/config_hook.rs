@@ -766,7 +766,7 @@ pub fn refresh_native_settings() {
                 if let Some(method) = item.get_class().get_virtual_method(method_name) {
                     skyline::println!(
                         "[ELP V10.27g] METHOD #{} {} ptr={:p}",
-                        index, method_name, method.method_info.method_ptr
+                        index, method_name, method.method_info.method_ptr as *const c_void
                     );
                     let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
                         std::mem::transmute(method.method_info.method_ptr);
