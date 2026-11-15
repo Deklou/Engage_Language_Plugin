@@ -12,7 +12,7 @@ use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
 static MESS_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MESS_CAPTURE: Mutex<Option<HashMap<usize, Option<String>>>> = Mutex::new(None);
 static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
-// V10.27 experimental: rows outside the 25 native settings. Snapshot identity and
+// V10.27 experimental: any row not captured as a native setting. Snapshot identity and
 // the exact Mess.Get key when it exists; never guess a key from visible text.
 struct ExtraSettingsRow {
     ptr: usize,
@@ -639,12 +639,15 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
             }
             skyline::println!("[ELP V10.17] TITLE #{} class={} key={:?} current={:?}", i, expected, key, before);
         }
-        // Third-party extensions may append additional ConfigBasicMenuItem rows.
-        // Do not assume any plugin-specific name or a fixed number of extras.
+        // Third-party extensions may insert or append ConfigBasicMenuItem rows.
+        // Compare actual pointers, not plugin names or fixed list positions.
         if let Ok(mut extra) = EXTRA_SETTINGS_ROWS.lock() {
-            for (i, entry) in list.iter().enumerate().skip(25).take(103) {
+            for (i, entry) in list.iter().enumerate().take(128) {
                 let ptr = *entry as *const ConfigBasicMenuItem;
                 if ptr.is_null() { continue; }
+                if NATIVE_ITEMS.iter().any(|native| native.load(Ordering::Relaxed) == ptr as usize) {
+                    continue;
+                }
                 let class_name = format!("{:?}", entry.get_class().get_name());
                 let title_ptr = (&*ptr).title_text as *const Il2CppString as usize;
                 let title_key = MESS_CAPTURE.lock().ok().and_then(|guard| {
@@ -759,7 +762,7 @@ pub fn refresh_native_settings() {
                 let item = &mut *ptr;
                 let class_name = format!("{:?}", item.get_class().get_name());
                 if class_name != row.class_name {
-                    skyline::println!("[ELP V10.27] EXTRA #{} identity changed; skip", i + 25);
+                    skyline::println!("[ELP V10.27] EXTRA #{} identity changed; skip", i);
                     continue;
                 }
                 // Update the title only with a proven MSBT mapping. Plugin titles
@@ -784,7 +787,7 @@ pub fn refresh_native_settings() {
                     }
                 }
                 item.update_text();
-                skyline::println!("[ELP V10.27] EXTRA #{} refreshed class={}", i + 25, class_name);
+                skyline::println!("[ELP V10.27] EXTRA #{} refreshed class={}", i, class_name);
             }
         }
     }
