@@ -719,13 +719,13 @@ pub fn refresh_native_settings() {
         }
     }
 
-    // V10.27b: no persistent extra-row cache or additional mutexes.
-    // The first test crashed in the Settings creation hook immediately after
-    // capturing three plugin rows, before any language switch. Inspect live
-    // rows only when the user actually triggers a language refresh.
+    // V10.27c: read-only diagnostic after the V10.27b crash on language switch.
+    // Do not call third-party virtual setters or BuildText yet; their ABI and
+    // side effects are not proven safe for these three plugin-specific classes.
+    // This lets us isolate the crash without changing the stable native refresh.
     let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
     if seq.is_null() {
-        skyline::println!("[ELP V10.27b] SKIP no active Settings sequence");
+        skyline::println!("[ELP V10.27c] SKIP no active Settings sequence");
         return;
     }
     unsafe {
@@ -741,33 +741,20 @@ pub fn refresh_native_settings() {
         let list = &*full;
         let size = list.len();
         if size < 25 || size > list.capacity() || size > 128 { return; }
-        let mut refreshed = 0usize;
+        let mut observed = 0usize;
         for (index, entry) in list.iter().enumerate().take(128) {
-            let ptr = (*entry as *const ConfigBasicMenuItem).cast_mut();
+            let ptr = *entry as *const ConfigBasicMenuItem;
             if ptr.is_null() { continue; }
-            // Work with additions at any position. The 25 native rows
-            // are already updated by the existing stable code above.
             if NATIVE_ITEMS.iter().any(|native| {
                 native.load(Ordering::Relaxed) == ptr as usize
             }) {
                 continue;
             }
-            let item = &mut *ptr;
-            let class_name = format!("{:?}", item.get_class().get_name());
-            // Plugins own these setters. Do not infer translation keys from
-            // their displayed strings or call state-changing actions.
-            for method_name in ["SetCommandText", "SetHelpText"] {
-                if let Some(method) = item.get_class().get_virtual_method(method_name) {
-                    let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
-                        std::mem::transmute(method.method_info.method_ptr);
-                    invoke(item, method.method_info);
-                }
-            }
-            item.update_text();
-            refreshed += 1;
-            skyline::println!("[ELP V10.27b] EXTRA #{} refreshed class={}", index, class_name);
+            let class_name = format!("{:?}", entry.get_class().get_name());
+            observed += 1;
+            skyline::println!("[ELP V10.27c] OBSERVE EXTRA #{} class={}", index, class_name);
         }
-        skyline::println!("[ELP V10.27b] DONE refreshed={} total_rows={}", refreshed, size);
+        skyline::println!("[ELP V10.27c] DONE observed={} total_rows={}", observed, size);
     }
 }
 
