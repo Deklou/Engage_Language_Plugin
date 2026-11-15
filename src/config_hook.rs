@@ -5,7 +5,8 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use unity::prelude::*;
 use unity::system::List;
-use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
+use engage::menu::{ConfigMenu, BasicMenu, BasicMenuItem, config::ConfigBasicMenuItem};
+use engage::proc::ProcInst;
 
 // Capture strictement limitee au CreateConfigMenu en cours :
 // Mess.Get(label) => adresse Il2CppString retournee, sans modifier le texte.
@@ -661,6 +662,73 @@ const TARGET_CLASSES: [&str; 25] = [
     "IsEnableNetworkMenuItem",
 ];
 
+// V10.28a: READ-ONLY provenance probe for the map system screen.
+// Expected ProcInst chain during Settings creation:
+// ConfigSequence -> MapSystemMenu.SubSystemMenu -> MapSystemMenu.
+// The relevant parent menus are still alive, and their GetName/GetHelpText
+// methods derive labels from MSBT. Do not mutate or retain parent pointers
+// until their lifetime and menu content types have been validated in Ryujinx.
+fn elp_probe_map_system_parents(seq_ptr: *const c_void) {
+    if seq_ptr.is_null() { return; }
+    unsafe {
+        let seq = &*(seq_ptr as *const ProcInst);
+        let seq_name = format!("{:?}", seq.get_class().get_name());
+        if seq_name != r#""ConfigSequence""#
+            && seq_name != r#"Some("ConfigSequence")"# {
+            skyline::println!("[ELP V10.28a] SKIP unexpected sequence class={}", seq_name);
+            return;
+        }
+
+        let submenu_proc: &ProcInst = match seq.parent.as_ref() {
+            Some(parent) => &**parent,
+            None => {
+                skyline::println!("[ELP V10.28a] NO PARENT of ConfigSequence");
+                return;
+            }
+        };
+        let submenu_name = format!("{:?}", submenu_proc.get_class().get_name());
+        skyline::println!("[ELP V10.28a] parent1 class={}", submenu_name);
+        if submenu_name != r#""SubSystemMenu""#
+            && submenu_name != r#"Some("SubSystemMenu")"# { return; }
+
+        let root_proc: &ProcInst = match submenu_proc.parent.as_ref() {
+            Some(parent) => &**parent,
+            None => {
+                skyline::println!("[ELP V10.28a] NO ROOT parent of SubSystemMenu");
+                return;
+            }
+        };
+        let root_name = format!("{:?}", root_proc.get_class().get_name());
+        skyline::println!("[ELP V10.28a] parent2 class={}", root_name);
+        if root_name != r#""MapSystemMenu""#
+            && root_name != r#"Some("MapSystemMenu")"# { return; }
+
+        for (role, proc) in [("SUBMENU", submenu_proc), ("ROOT", root_proc)] {
+            let menu = &*(proc as *const ProcInst as *const BasicMenu<BasicMenuItem>);
+            let list = &*menu.full_menu_item_list;
+            let size = list.len();
+            let capacity = list.capacity();
+            if size == 0 || size > capacity || size > 32 {
+                skyline::println!("[ELP V10.28a] {} INVALID size={} cap={}",
+                    role, size, capacity);
+                continue;
+            }
+            skyline::println!(
+                "[ELP V10.28a] {} FOUND size={} cap={} select={} scroll={}",
+                role, size, capacity, menu.select_index, menu.scroll_index
+            );
+            for (index, entry) in list.iter().take(size).enumerate() {
+                let item_name = format!("{:?}", entry.get_class().get_name());
+                skyline::println!(
+                    "[ELP V10.28a] {} ROW #{} class={}",
+                    role, index, item_name
+                );
+            }
+        }
+        skyline::println!("[ELP V10.28a] DONE read-only parent probe");
+    }
+}
+
 #[skyline::hook(offset = 0x253a470)]
 fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
     for item in NATIVE_ITEMS.iter() { item.store(0, Ordering::Relaxed); }
@@ -721,6 +789,7 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
         }
         skyline::println!("[ELP V10.27b] captured 25 native rows, list size={}", size);
     }
+    elp_probe_map_system_parents(this);
 }
 
 pub fn refresh_native_settings() {
