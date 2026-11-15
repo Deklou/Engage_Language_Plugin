@@ -15,50 +15,88 @@ static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 // V10.24: ConfigSequence of the current Settings screen; replaced at creation.
 static SETTINGS_TITLEBAR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
- // V10.27h: data-driven fallback for third-party settings rows.
- // Extensions often resolve strings only when constructing their item.
- // Since those Rust callbacks are not virtual IL2CPP methods, the existing
- // item cannot re-run them. A catalog matches *displayed title text*, not
- // the plugin's class name, so additional translations can be added as data.
- struct ThirdPartyRowText {
-     title_en: &'static str,
-     title_fr: &'static str,
-     command_en: &'static str,
-     command_fr: &'static str,
-     help_en: &'static str,
-     help_fr: &'static str,
- }
- 
- // Cobalt FR wording: DivineDragonFanClub/localize/message/eu/eufr/table.json.
- // MyCodeMods FR help wording: fallback translation provided by this mod.
- // Only EN/FR are handled by this first experiment; other languages are left
- // untouched, rather than inserting incorrect translations.
- const THIRD_PARTY_ROW_TEXT: &[ThirdPartyRowText] = &[
-     ThirdPartyRowText {
-         title_en: "Cobalt Settings",
-         title_fr: "Paramètres de Cobalt",
-         command_en: "Open",
-         command_fr: "Afficher",
-         help_en: "Show the settings added by Cobalt.",
-         help_fr: "Afficher les paramètres ajoutés par Cobalt.",
-     },
-     ThirdPartyRowText {
-         title_en: "Plugin Settings",
-         title_fr: "Paramètres des plugins",
-         command_en: "Open",
-         command_fr: "Afficher",
-         help_en: "Show the settings added by plugins.",
-         help_fr: "Afficher les paramètres ajoutés par plugins.",
-     },
-     ThirdPartyRowText {
-         title_en: "MyCodeMods",
-         title_fr: "MyCodeMods",
-         command_en: "View",
-         command_fr: "Afficher",
-         help_en: "Open up MyCodeMods Settings",
-         help_fr: "Ouvrir les paramètres de MyCodeMods.",
-     },
- ];
+// V10.27i: localized text catalog, independent of plugin IL2CPP class names.
+// Cobalt strings are from DivineDragonFanClub/localize: usen, uses, eufr,
+// jpja, cnch, krko. The localize crate falls back to usen when regional keys
+// are absent; German, Italian and Traditional Chinese use that fallback.
+// MyCodeMods translations other than English are provided by our mod.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThirdPartyLocale { English, French, Spanish, Japanese, Chinese, Korean }
+
+struct ThirdPartyLocalizedText {
+    locale: ThirdPartyLocale,
+    title: &'static str,
+    command: &'static str,
+    help: &'static str,
+}
+struct ThirdPartyRowText {
+    variants: &'static [ThirdPartyLocalizedText],
+}
+fn third_party_locale(lang: i32) -> ThirdPartyLocale {
+    match lang {
+        0 => ThirdPartyLocale::Japanese,
+        2 | 5 => ThirdPartyLocale::French,
+        3 | 6 => ThirdPartyLocale::Spanish,
+        10 => ThirdPartyLocale::Chinese,
+        11 => ThirdPartyLocale::Korean,
+        // English (1,4), German (7), Italian (8) and Traditional Chinese (9)
+        // follow the Cobalt usen fallback when their keys are unavailable.
+        _ => ThirdPartyLocale::English,
+    }
+}
+const THIRD_PARTY_ROW_TEXT: &[ThirdPartyRowText] = &[
+    ThirdPartyRowText { variants: &[
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::English,
+            title: "Cobalt Settings", command: "Open",
+            help: "Show the settings added by Cobalt." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::French,
+            title: "Paramètres de Cobalt", command: "Afficher",
+            help: "Afficher les paramètres ajoutés par Cobalt." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Spanish,
+            title: "Ajustes de Cobalt", command: "Abrir",
+            help: "Ver ajustes agregados por Cobalt." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Japanese,
+            title: "Cobalt設定", command: "開く",
+            help: "Cobaltによって追加された設定を表示します" },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Chinese,
+            title: "Cobalt 设置", command: "打开",
+            help: "显示由 Cobalt 添加的设置" },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Korean,
+            title: "Cobalt 설정", command: "열기",
+            help: "Cobalt 추가 설정을 봅니다" },
+    ] },
+    ThirdPartyRowText { variants: &[
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::English,
+            title: "Plugin Settings", command: "Open",
+            help: "Show the settings added by plugins." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::French,
+            title: "Paramètres des plugins", command: "Afficher",
+            help: "Afficher les paramètres ajoutés par plugins." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Spanish,
+            title: "Ajustes de Plugins", command: "Abrir",
+            help: "Ver los ajustes agregados por plugins." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Japanese,
+            title: "プラグイン設定", command: "開く",
+            help: "プラグインによって追加された設定を表示します" },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Chinese,
+            title: "插件设置", command: "打开",
+            help: "显示由插件添加的设置" },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Korean,
+            title: "플러그인 설정", command: "열기",
+            help: "플러그인 추가 설정을 봅니다" },
+    ] },
+    ThirdPartyRowText { variants: &[
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::English,
+            title: "MyCodeMods", command: "View",
+            help: "Open up MyCodeMods Settings" },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::French,
+            title: "MyCodeMods", command: "Afficher",
+            help: "Ouvrir les paramètres de MyCodeMods." },
+        ThirdPartyLocalizedText { locale: ThirdPartyLocale::Spanish,
+            title: "MyCodeMods", command: "Ver",
+            help: "Abrir los ajustes de MyCodeMods." },
+    ] },
+];
 
 // Trace the earlier sequence phase, without changing the game's call path.
 // Capture stays active until CreateConfigMenu finishes, including any
@@ -764,18 +802,11 @@ pub fn refresh_native_settings() {
         }
     }
 
-    // V10.27h: bounded traversal, then translate from an extendable text
-    // catalog. This intentionally avoids attempting to call Cobalt's Rust
-    // construction-only callbacks as if they were virtual IL2CPP methods.
-    let locale_is_french = match unsafe { crate::interface::get_current_language() } {
-        5 => Some(true),
-        1 | 4 => Some(false),
-        _ => None,
-    };
-    let Some(is_french) = locale_is_french else {
-        skyline::println!("[ELP V10.27h] SKIP third-party text: no catalog for this locale");
-        return;
-    };
+    // V10.27i: resolve locale after the original ReflectSetting/Mess.Reload.
+    // Match titles against all known locales, so EN→FR→ES→EN works without
+    // recreating the menu. Never access List slots beyond list.len().
+    let language = unsafe { crate::interface::get_current_language() };
+    let locale = third_party_locale(language);
     let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
     if seq.is_null() { return; }
     unsafe {
@@ -791,6 +822,7 @@ pub fn refresh_native_settings() {
         let list = &*full;
         let size = list.len();
         if size < 25 || size > list.capacity() || size > 128 { return; }
+
         let mut translated_count = 0usize;
         let mut unknown_count = 0usize;
         for (index, entry) in list.iter().take(size).enumerate() {
@@ -798,42 +830,41 @@ pub fn refresh_native_settings() {
             if ptr.is_null() { continue; }
             if NATIVE_ITEMS.iter().any(|native| {
                 native.load(Ordering::Relaxed) == ptr as usize
-            }) {
-                continue;
-            }
+            }) { continue; }
+
             let item = &mut *ptr;
             let old_title = item.title_text.get_string().unwrap_or_default();
             if let Some(row) = THIRD_PARTY_ROW_TEXT.iter().find(|row| {
-                old_title == row.title_en || old_title == row.title_fr
+                row.variants.iter().any(|text| text.title == old_title)
             }) {
-                let (title, command, help) = if is_french {
-                    (row.title_fr, row.command_fr, row.help_fr)
-                } else {
-                    (row.title_en, row.command_en, row.help_en)
-                };
-                item.title_text = title.into();
-                item.command_text = command.into();
-                item.help_text = help.into();
-                item.update_text();
-                translated_count += 1;
-                skyline::println!(
-                    "[ELP V10.27h] TRANSLATED #{} title={:?} command={:?} help={:?}",
-                    index, title, command, help
-                );
+                // Fallback to English if Cobalt has no regional translation.
+                let localized = row.variants.iter()
+                    .find(|text| text.locale == locale)
+                    .or_else(|| row.variants.iter().find(|text| {
+                        text.locale == ThirdPartyLocale::English
+                    }));
+                if let Some(text) = localized {
+                    item.title_text = text.title.into();
+                    item.command_text = text.command.into();
+                    item.help_text = text.help.into();
+                    item.update_text();
+                    translated_count += 1;
+                    skyline::println!(
+                        "[ELP V10.27i] TRANSLATED #{} title={:?} command={:?} help={:?}",
+                        index, text.title, text.command, text.help
+                    );
+                }
             } else {
-                // Unknown plugin strings must remain untouched. Guessing their
-                // translations would make this unsafe for future plugins.
                 unknown_count += 1;
                 skyline::println!(
-                    "[ELP V10.27h] NO MAPPING #{} title={:?}",
+                    "[ELP V10.27i] NO MAPPING #{} title={:?}",
                     index, old_title
                 );
             }
         }
         skyline::println!(
-            "[ELP V10.27h] DONE rows={} translated={} unknown={} lang={}",
-            size, translated_count, unknown_count,
-            crate::interface::get_current_language()
+            "[ELP V10.27i] DONE rows={} translated={} unknown={} lang={}",
+            size, translated_count, unknown_count, language
         );
     }
 }
