@@ -200,6 +200,9 @@ impl TwoChoiceDialogMethods for LanguageConfirmation {
                     crate::voice::refresh_voice_after_language_change(&mut *menu_item);
                 }
             });
+            // V10.28b: on the confirmed language, refresh the still-live map
+            // parent menus and the chapter card without reopening them.
+            crate::config_hook::refresh_map_system_menus();
         }
         BasicMenuResult::new().with_close_this(true)
     }

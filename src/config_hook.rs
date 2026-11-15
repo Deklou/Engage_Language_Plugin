@@ -5,7 +5,8 @@ use std::sync::Mutex;
 use std::collections::HashMap;
 use unity::prelude::*;
 use unity::system::List;
-use engage::menu::{ConfigMenu, config::ConfigBasicMenuItem};
+use engage::menu::{ConfigMenu, BasicMenu, BasicMenuItem, config::ConfigBasicMenuItem};
+use engage::proc::ProcInst;
 
 // Capture strictement limitee au CreateConfigMenu en cours :
 // Mess.Get(label) => adresse Il2CppString retournee, sans modifier le texte.
@@ -661,6 +662,191 @@ const TARGET_CLASSES: [&str; 25] = [
     "IsEnableNetworkMenuItem",
 ];
 
+// V10.28a: READ-ONLY provenance probe for the map system screen.
+// Expected ProcInst chain during Settings creation:
+// ConfigSequence -> MapSystemMenu.SubSystemMenu -> MapSystemMenu.
+// The relevant parent menus are still alive, and their GetName/GetHelpText
+// methods derive labels from MSBT. Do not mutate or retain parent pointers
+// until their lifetime and menu content types have been validated in Ryujinx.
+fn elp_probe_map_system_parents(seq_ptr: *const c_void) {
+    if seq_ptr.is_null() { return; }
+    unsafe {
+        let seq = &*(seq_ptr as *const ProcInst);
+        let seq_name = format!("{:?}", seq.get_class().get_name());
+        if seq_name != r#""ConfigSequence""#
+            && seq_name != r#"Some("ConfigSequence")"# {
+            skyline::println!("[ELP V10.28a] SKIP unexpected sequence class={}", seq_name);
+            return;
+        }
+
+        let submenu_proc: &ProcInst = match seq.parent.as_ref() {
+            Some(parent) => &**parent,
+            None => {
+                skyline::println!("[ELP V10.28a] NO PARENT of ConfigSequence");
+                return;
+            }
+        };
+        let submenu_name = format!("{:?}", submenu_proc.get_class().get_name());
+        skyline::println!("[ELP V10.28a] parent1 class={}", submenu_name);
+        if submenu_name != r#""SubSystemMenu""#
+            && submenu_name != r#"Some("SubSystemMenu")"# { return; }
+
+        let root_proc: &ProcInst = match submenu_proc.parent.as_ref() {
+            Some(parent) => &**parent,
+            None => {
+                skyline::println!("[ELP V10.28a] NO ROOT parent of SubSystemMenu");
+                return;
+            }
+        };
+        let root_name = format!("{:?}", root_proc.get_class().get_name());
+        skyline::println!("[ELP V10.28a] parent2 class={}", root_name);
+        if root_name != r#""MapSystemMenu""#
+            && root_name != r#"Some("MapSystemMenu")"# { return; }
+
+        for (role, proc) in [("SUBMENU", submenu_proc), ("ROOT", root_proc)] {
+            let menu = &*(proc as *const ProcInst as *const BasicMenu<BasicMenuItem>);
+            let list = &*menu.full_menu_item_list;
+            let size = list.len();
+            let capacity = list.capacity();
+            if size == 0 || size > capacity || size > 32 {
+                skyline::println!("[ELP V10.28a] {} INVALID size={} cap={}",
+                    role, size, capacity);
+                continue;
+            }
+            skyline::println!(
+                "[ELP V10.28a] {} FOUND size={} cap={}",
+                role, size, capacity
+            );
+            for (index, entry) in list.iter().take(size).enumerate() {
+                let item_name = format!("{:?}", entry.get_class().get_name());
+                skyline::println!(
+                    "[ELP V10.28a] {} ROW #{} class={}",
+                    role, index, item_name
+                );
+            }
+        }
+        skyline::println!("[ELP V10.28a] DONE read-only parent probe");
+    }
+}
+
+// V10.28b: native text update for the two still-live map menus.
+// Confirmed by Ghidra, Engage v2.0.0: App.InfoUtil.TrySetText(TMP, string)
+// at 0x710290f0a0; SortieTopMenuContent.UpdateInfo(bool) at 0x71024ec450.
+// Unlike Build/OnSelect, these do not recreate or reselect menu entries.
+#[skyline::from_offset(0x2467490)]
+fn elp_map_build_content_text(content: *const c_void, mi: *const c_void);
+
+#[skyline::from_offset(0x290f0a0)]
+fn elp_map_try_set_help_text(tmp: *const c_void, value: *const Il2CppString, mi: *const c_void);
+
+#[skyline::from_offset(0x24ec450)]
+fn elp_map_update_chapter_info(content: *const c_void, sortie_top: bool, mi: *const c_void);
+
+/// Refresh only existing map menu text objects. No new menu, no selection
+/// changes, no reuse of cached parent pointers after Settings is closed.
+/// The item and item-content field offsets below are verified in Ghidra:
+/// BasicMenuItem.m_menuItemContent @ +0x18;
+/// SortieTopMenuItemContent.m_help @ +0x50.
+pub fn refresh_map_system_menus() {
+    let seq_ptr = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
+    if seq_ptr.is_null() { return; }
+
+    unsafe {
+        let seq = &*(seq_ptr as *const ProcInst);
+        if seq.get_class().get_name() != "ConfigSequence" {
+            skyline::println!("[ELP V10.28b] SKIP wrong Settings sequence");
+            return;
+        }
+        let submenu_proc: &ProcInst = match seq.parent.as_ref() {
+            Some(p) => &**p,
+            None => { skyline::println!("[ELP V10.28b] SKIP missing submenu"); return; }
+        };
+        if submenu_proc.get_class().get_name() != "SubSystemMenu" {
+            skyline::println!("[ELP V10.28b] SKIP wrong parent1");
+            return;
+        }
+        let root_proc: &ProcInst = match submenu_proc.parent.as_ref() {
+            Some(p) => &**p,
+            None => { skyline::println!("[ELP V10.28b] SKIP missing root"); return; }
+        };
+        if root_proc.get_class().get_name() != "MapSystemMenu" {
+            skyline::println!("[ELP V10.28b] SKIP wrong parent2");
+            return;
+        }
+
+        for (role, proc) in [("SUBMENU", submenu_proc), ("ROOT", root_proc)] {
+            let menu = &*(proc as *const ProcInst as *const BasicMenu<BasicMenuItem>);
+            let list = &*menu.full_menu_item_list;
+            let size = list.len();
+            let cap = list.capacity();
+            if size == 0 || size > cap || size > 32 {
+                skyline::println!("[ELP V10.28b] {} INVALID list size={} cap={}", role, size, cap);
+                continue;
+            }
+            let mut names = 0usize;
+            let mut help = 0usize;
+            let mut no_content = 0usize;
+            for (index, item) in list.iter().take(size).enumerate() {
+                let ptr = *item as *const BasicMenuItem;
+                if ptr.is_null() { continue; }
+                let content_ptr = (ptr.cast::<u8>().add(0x18) as *const *const c_void).read();
+                if content_ptr.is_null() {
+                    no_content += 1;
+                    continue;
+                }
+                // The game's normal BuildText calls the item's *virtual*
+                // GetName, which re-resolves MSBT in the selected language.
+                elp_map_build_content_text(content_ptr, core::ptr::null());
+                names += 1;
+
+                let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
+                let content_class = content.get_class().get_name();
+                if content_class == "SortieTopMenuItemContent" {
+                    // GetHelpText is virtual on the *item*, not on the content.
+                    let klass = item.get_class();
+                    if let Some(v) = klass.get_virtual_method("GetHelpText") {
+                        let getter: extern "C" fn(*const BasicMenuItem, &MethodInfo)
+                            -> *const Il2CppString = std::mem::transmute(v.method_ptr);
+                        let help_text = getter(ptr, v.method_info);
+                        let tmp = (content_ptr.cast::<u8>().add(0x50)
+                            as *const *const c_void).read();
+                        if !help_text.is_null() && !tmp.is_null() {
+                            elp_map_try_set_help_text(tmp, help_text, core::ptr::null());
+                            help += 1;
+                        }
+                    }
+                } else {
+                    skyline::println!(
+                        "[ELP V10.28b] {} ROW #{} content_class={} help=SKIP",
+                        role, index, content_class
+                    );
+                }
+            }
+            skyline::println!(
+                "[ELP V10.28b] {} DONE size={} titles={} helps={} no_content={}",
+                role, size, names, help, no_content
+            );
+
+            if role == "ROOT" {
+                let content_ptr = menu.menu_content as *const c_void;
+                if !content_ptr.is_null() {
+                    let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
+                    if content.get_class().get_name() == "SortieTopMenuContent" {
+                        // Original MapSystemMenu.CreateBind passes false.
+                        // UpdateInfo rebuilds the chapter title, victory/defeat
+                        // labels, turn labels and other localized chapter info.
+                        elp_map_update_chapter_info(content_ptr, false, core::ptr::null());
+                        skyline::println!("[ELP V10.28b] CHAPTER INFO refreshed");
+                    } else {
+                        skyline::println!("[ELP V10.28b] CHAPTER INFO skipped: content mismatch");
+                    }
+                }
+            }
+        }
+        skyline::println!("[ELP V10.28b] ALL DONE");
+    }
+}
+
 #[skyline::hook(offset = 0x253a470)]
 fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_void) {
     for item in NATIVE_ITEMS.iter() { item.store(0, Ordering::Relaxed); }
@@ -721,6 +907,7 @@ fn config_sequence_create_config_menu(this: *mut c_void, method_info: *const c_v
         }
         skyline::println!("[ELP V10.27b] captured 25 native rows, list size={}", size);
     }
+    elp_probe_map_system_parents(this);
 }
 
 pub fn refresh_native_settings() {
