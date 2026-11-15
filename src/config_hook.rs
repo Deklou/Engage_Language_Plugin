@@ -743,7 +743,7 @@ pub fn refresh_native_settings() {
         if size < 25 || size > list.capacity() || size > 128 { return; }
         let mut refreshed = 0usize;
         for (index, entry) in list.iter().enumerate().take(128) {
-            let ptr = *entry as *mut ConfigBasicMenuItem;
+            let ptr = (*entry as *const ConfigBasicMenuItem).cast_mut();
             if ptr.is_null() { continue; }
             // Work with additions at any position. The 25 native rows
             // are already updated by the existing stable code above.
