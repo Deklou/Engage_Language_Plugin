@@ -15,6 +15,51 @@ static NATIVE_TITLE_KEYS: Mutex<Vec<Option<String>>> = Mutex::new(Vec::new());
 // V10.24: ConfigSequence of the current Settings screen; replaced at creation.
 static SETTINGS_TITLEBAR_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
+ // V10.27h: data-driven fallback for third-party settings rows.
+ // Extensions often resolve strings only when constructing their item.
+ // Since those Rust callbacks are not virtual IL2CPP methods, the existing
+ // item cannot re-run them. A catalog matches *displayed title text*, not
+ // the plugin's class name, so additional translations can be added as data.
+ struct ThirdPartyRowText {
+     title_en: &'static str,
+     title_fr: &'static str,
+     command_en: &'static str,
+     command_fr: &'static str,
+     help_en: &'static str,
+     help_fr: &'static str,
+ }
+ 
+ // Cobalt FR wording: DivineDragonFanClub/localize/message/eu/eufr/table.json.
+ // MyCodeMods FR help wording: fallback translation provided by this mod.
+ // Only EN/FR are handled by this first experiment; other languages are left
+ // untouched, rather than inserting incorrect translations.
+ const THIRD_PARTY_ROW_TEXT: &[ThirdPartyRowText] = &[
+     ThirdPartyRowText {
+         title_en: "Cobalt Settings",
+         title_fr: "Paramètres de Cobalt",
+         command_en: "Open",
+         command_fr: "Afficher",
+         help_en: "Show the settings added by Cobalt.",
+         help_fr: "Afficher les paramètres ajoutés par Cobalt.",
+     },
+     ThirdPartyRowText {
+         title_en: "Plugin Settings",
+         title_fr: "Paramètres des plugins",
+         command_en: "Open",
+         command_fr: "Afficher",
+         help_en: "Show the settings added by plugins.",
+         help_fr: "Afficher les paramètres ajoutés par plugins.",
+     },
+     ThirdPartyRowText {
+         title_en: "MyCodeMods",
+         title_fr: "MyCodeMods",
+         command_en: "View",
+         command_fr: "Afficher",
+         help_en: "Open up MyCodeMods Settings",
+         help_fr: "Ouvrir les paramètres de MyCodeMods.",
+     },
+ ];
+
 // Trace the earlier sequence phase, without changing the game's call path.
 // Capture stays active until CreateConfigMenu finishes, including any
 // scheduled intermediate UI setup. The map is capped at 8192 entries.
@@ -719,10 +764,18 @@ pub fn refresh_native_settings() {
         }
     }
 
-    // V10.27f: the List's backing-array iterator visits its 32 slots,
-    // even though the current menu has only 28 valid entries. All previous
-    // diagnostics accidentally traversed the unused slots 28..31.
-    // Always bound iteration by list.len(), NEVER capacity or a fixed cap.
+    // V10.27h: bounded traversal, then translate from an extendable text
+    // catalog. This intentionally avoids attempting to call Cobalt's Rust
+    // construction-only callbacks as if they were virtual IL2CPP methods.
+    let locale_is_french = match crate::interface::get_current_language() {
+        5 => Some(true),
+        1 | 4 => Some(false),
+        _ => None,
+    };
+    let Some(is_french) = locale_is_french else {
+        skyline::println!("[ELP V10.27h] SKIP third-party text: no catalog for this locale");
+        return;
+    };
     let seq = SETTINGS_TITLEBAR_SEQUENCE.load(Ordering::Relaxed) as *const c_void;
     if seq.is_null() { return; }
     unsafe {
@@ -738,59 +791,49 @@ pub fn refresh_native_settings() {
         let list = &*full;
         let size = list.len();
         if size < 25 || size > list.capacity() || size > 128 { return; }
-        let mut refreshed = 0usize;
+        let mut translated_count = 0usize;
+        let mut unknown_count = 0usize;
         for (index, entry) in list.iter().take(size).enumerate() {
             let ptr = (*entry as *const ConfigBasicMenuItem).cast_mut();
             if ptr.is_null() { continue; }
-            // Native entries remain handled by the existing stable loop.
-            // Detect third-party rows by pointer, not their names or indices.
             if NATIVE_ITEMS.iter().any(|native| {
                 native.load(Ordering::Relaxed) == ptr as usize
             }) {
                 continue;
             }
             let item = &mut *ptr;
-            let class_name = format!("{:?}", item.get_class().get_name());
-            // V10.27g diagnostics: Cobalt has built-in French translations,
-            // but the already-created rows still display English after refresh.
-            // Compare live item fields before/after the registered virtual calls.
-            let before_title = item.title_text.get_string().unwrap_or_default();
-            let before_command = item.command_text.get_string().unwrap_or_default();
-            let before_help = item.help_text.get_string().unwrap_or_default();
-            skyline::println!(
-                "[ELP V10.27g] BEFORE #{} class={} title={:?} cmd={:?} help={:?}",
-                index, class_name, before_title, before_command, before_help
-            );
-            // Re-run virtual text providers; NEVER invoke plugin action handlers.
-            for method_name in ["SetCommandText", "SetHelpText"] {
-                if let Some(method) = item.get_class().get_virtual_method(method_name) {
-                    skyline::println!(
-                        "[ELP V10.27g] METHOD #{} {} ptr={:p}",
-                        index, method_name, method.method_info.method_ptr as *const c_void
-                    );
-                    let invoke: extern "C" fn(&mut ConfigBasicMenuItem, &MethodInfo) =
-                        std::mem::transmute(method.method_info.method_ptr);
-                    invoke(item, method.method_info);
+            let old_title = item.title_text.get_string().unwrap_or_default();
+            if let Some(row) = THIRD_PARTY_ROW_TEXT.iter().find(|row| {
+                old_title == row.title_en || old_title == row.title_fr
+            }) {
+                let (title, command, help) = if is_french {
+                    (row.title_fr, row.command_fr, row.help_fr)
                 } else {
-                    skyline::println!("[ELP V10.27g] METHOD #{} {} MISSING", index, method_name);
-                }
+                    (row.title_en, row.command_en, row.help_en)
+                };
+                item.title_text = title.into();
+                item.command_text = command.into();
+                item.help_text = help.into();
+                item.update_text();
+                translated_count += 1;
+                skyline::println!(
+                    "[ELP V10.27h] TRANSLATED #{} title={:?} command={:?} help={:?}",
+                    index, title, command, help
+                );
+            } else {
+                // Unknown plugin strings must remain untouched. Guessing their
+                // translations would make this unsafe for future plugins.
+                unknown_count += 1;
+                skyline::println!(
+                    "[ELP V10.27h] NO MAPPING #{} title={:?}",
+                    index, old_title
+                );
             }
-            let after_title = item.title_text.get_string().unwrap_or_default();
-            let after_command = item.command_text.get_string().unwrap_or_default();
-            let after_help = item.help_text.get_string().unwrap_or_default();
-            skyline::println!(
-                "[ELP V10.27g] AFTER #{} title={:?} cmd={:?} help={:?}",
-                index, after_title, after_command, after_help
-            );
-            item.update_text();
-            refreshed += 1;
-            skyline::println!("[ELP V10.27g] EXTRA #{} refreshed class={}", index, class_name);
         }
         skyline::println!(
-            "[ELP V10.27g] REFRESH DONE total={} native_cached={} extra_refreshed={}",
-            size,
-            NATIVE_ITEMS.iter().filter(|p| p.load(Ordering::Relaxed) != 0).count(),
-            refreshed
+            "[ELP V10.27h] DONE rows={} translated={} unknown={} lang={}",
+            size, translated_count, unknown_count,
+            crate::interface::get_current_language()
         );
     }
 }
