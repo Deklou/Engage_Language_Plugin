@@ -742,8 +742,14 @@ fn elp_map_try_set_help_text(tmp: *const c_void, value: *const Il2CppString, mi:
 #[skyline::from_offset(0x24ec450)]
 fn elp_map_update_chapter_info(content: *const c_void, sortie_top: bool, mi: *const c_void);
 
-/// Refresh only existing map menu text objects. No new menu, no selection
-/// changes, no reuse of cached parent pointers after Settings is closed.
+// GmapMenuContent.SetTitle resolves MID_MENU_TITLE_GMAP with the active
+// game's language. Refresh the existing TMP; do not call Awake or rebuild UI.
+#[skyline::from_offset(0x252db80)]
+fn elp_gmap_set_title(content: *const c_void, mi: *const c_void);
+
+/// Refresh existing tactical and world-map menu texts in the currently
+/// selected game's language. No new menu, selection changes, language filter,
+/// or reuse of cached parent pointers after Settings is closed.
 /// The item and item-content field offsets below are verified in Ghidra:
 /// BasicMenuItem.m_menuItemContent @ +0x18;
 /// SortieTopMenuItemContent.m_help @ +0x50.
@@ -769,8 +775,11 @@ pub fn refresh_map_system_menus() {
             Some(p) => &**p,
             None => { skyline::println!("[ELP V10.28b] SKIP missing root"); return; }
         };
-        if root_proc.get_class().get_name() != "MapSystemMenu" {
-            skyline::println!("[ELP V10.28b] SKIP wrong parent2");
+        let root_class = root_proc.get_class().get_name();
+        // The three world-map modes (GMAP / GMAP_G / GMAP_E) use GmapMenu.
+        // Keep the tactical MapSystemMenu path and its existing behavior.
+        if root_class != "MapSystemMenu" && root_class != "GmapMenu" {
+            skyline::println!("[ELP V10.29] SKIP unrelated root={}", root_class);
             return;
         }
 
@@ -831,14 +840,23 @@ pub fn refresh_map_system_menus() {
                 let content_ptr = menu.menu_content as *const c_void;
                 if !content_ptr.is_null() {
                     let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
-                    if content.get_class().get_name() == "SortieTopMenuContent" {
-                        // Original MapSystemMenu.CreateBind passes false.
-                        // UpdateInfo rebuilds the chapter title, victory/defeat
-                        // labels, turn labels and other localized chapter info.
-                        elp_map_update_chapter_info(content_ptr, false, core::ptr::null());
-                        skyline::println!("[ELP V10.28b] CHAPTER INFO refreshed");
-                    } else {
-                        skyline::println!("[ELP V10.28b] CHAPTER INFO skipped: content mismatch");
+                    match (root_class.as_str(), content.get_class().get_name().as_str()) {
+                        ("MapSystemMenu", "SortieTopMenuContent") => {
+                            // Preserve the tactical map chapter refresh.
+                            elp_map_update_chapter_info(content_ptr, false, core::ptr::null());
+                            skyline::println!("[ELP V10.28b] CHAPTER INFO refreshed");
+                        }
+                        ("GmapMenu", "GmapMenuContent") => {
+                            // Native Mess.Get: works for every installed game language.
+                            elp_gmap_set_title(content_ptr, core::ptr::null());
+                            skyline::println!("[ELP V10.29] GMAP TITLE refreshed");
+                        }
+                        _ => {
+                            skyline::println!(
+                                "[ELP V10.29] ROOT CONTENT skipped: root={} content={}",
+                                root_class, content.get_class().get_name()
+                            );
+                        }
                     }
                 }
             }
