@@ -747,7 +747,71 @@ fn elp_map_update_chapter_info(content: *const c_void, sortie_top: bool, mi: *co
 #[skyline::from_offset(0x252db80)]
 fn elp_gmap_set_title(content: *const c_void, mi: *const c_void);
 
-/// Refresh existing tactical and world-map menu texts in the currently
+// Somniel/Hub: SetTitle resolves MID_MENU_TITLE_HUB or MID_MENU_TITLE_KIZUNA.
+#[skyline::from_offset(0x28b86a0)]
+fn elp_hub_set_title(content: *const c_void, mi: *const c_void);
+
+// Used by HubMenuContent.Awake to display the time of day. Reuse only the
+// text operations, not Awake (which also resets UI/animation references).
+#[skyline::from_offset(0x2a5a030)]
+fn elp_hub_get_timezone_type(mi: *const c_void) -> i32;
+#[skyline::from_offset(0x1c5f9a0)]
+fn elp_hub_find_child_game_object(go: *const c_void, name: *const Il2CppString,
+    mi: *const c_void) -> *const c_void;
+#[skyline::from_offset(0x290f3b0)]
+fn elp_hub_try_set_text_game_object(go: *const c_void, text: *const Il2CppString,
+    mi: *const c_void);
+
+// HubMenuContent.Awake writes two separate persistent labels under Time:
+// Time/Text is Morning/Noon/Evening/Night, and Time/Title is "This time".
+// Re-resolve both from the game's MSBT after the language reload, without
+// changing the current period, object visibility, or menu selection.
+unsafe fn elp_refresh_hub_time(content: *const c_void) {
+    let root_go = elp_ui_get_game_object(content, core::ptr::null());
+    if root_go.is_null() { return; }
+    let time_name: &'static Il2CppString = "Time".into();
+    let time_go = elp_hub_find_child_game_object(root_go, time_name, core::ptr::null());
+    if time_go.is_null() { return; }
+
+    let mut updated = 0usize;
+    let time_key = match elp_hub_get_timezone_type(core::ptr::null()) {
+        0 => Some("MID_Hub_Time_Morning"),
+        1 => Some("MID_Hub_Time_Noon"),
+        2 => Some("MID_Hub_Time_Evening"),
+        3 => Some("MID_Hub_Time_Night"),
+        _ => None,
+    };
+    if let Some(key) = time_key {
+        let text_name: &'static Il2CppString = "Text".into();
+        let text_go = elp_hub_find_child_game_object(time_go, text_name,
+            core::ptr::null());
+        if !text_go.is_null() {
+            let mess_key: &'static Il2CppString = key.into();
+            let value = crate::interface::get_message(mess_key);
+            let display = value.get_string().unwrap_or_default();
+            if !display.is_empty() && display != key {
+                elp_hub_try_set_text_game_object(text_go, value, core::ptr::null());
+                updated += 1;
+            }
+        }
+    }
+
+    let title_name: &'static Il2CppString = "Title".into();
+    let title_go = elp_hub_find_child_game_object(time_go, title_name,
+        core::ptr::null());
+    if !title_go.is_null() {
+        let mess_key: &'static Il2CppString = "MID_Hub_ThisTime".into();
+        let value = crate::interface::get_message(mess_key);
+        let display = value.get_string().unwrap_or_default();
+        if !display.is_empty() && display != "MID_Hub_ThisTime" {
+            elp_hub_try_set_text_game_object(title_go, value, core::ptr::null());
+            updated += 1;
+        }
+    }
+    skyline::println!("[ELP V10.30] HUB TIME updated={}/2", updated);
+}
+
+/// Refresh existing tactical, world-map and Somniel/Hub menu texts in the
 /// selected game's language. No new menu, selection changes, language filter,
 /// or reuse of cached parent pointers after Settings is closed.
 /// The item and item-content field offsets below are verified in Ghidra:
@@ -777,8 +841,9 @@ pub fn refresh_map_system_menus() {
         };
         let root_class = root_proc.get_class().get_name();
         // The three world-map modes (GMAP / GMAP_G / GMAP_E) use GmapMenu.
-        // Keep the tactical MapSystemMenu path and its existing behavior.
-        if root_class != "MapSystemMenu" && root_class != "GmapMenu" {
+        // Preserve the tactical and world-map paths; HubMenu is independent.
+        if root_class != "MapSystemMenu" && root_class != "GmapMenu"
+            && root_class != "HubMenu" {
             skyline::println!("[ELP V10.29] SKIP unrelated root={}", root_class);
             return;
         }
@@ -850,6 +915,12 @@ pub fn refresh_map_system_menus() {
                             // Native Mess.Get: works for every installed game language.
                             elp_gmap_set_title(content_ptr, core::ptr::null());
                             skyline::println!("[ELP V10.29] GMAP TITLE refreshed");
+                        }
+                        ("HubMenu", "HubMenuContent") => {
+                            // The native method chooses the Hub or Kizuna title.
+                            elp_hub_set_title(content_ptr, core::ptr::null());
+                            elp_refresh_hub_time(content_ptr);
+                            skyline::println!("[ELP V10.30] HUB TITLE refreshed");
                         }
                         _ => {
                             skyline::println!(
