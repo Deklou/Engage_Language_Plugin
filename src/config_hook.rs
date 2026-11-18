@@ -840,7 +840,7 @@ pub fn refresh_map_system_menus() {
                 let content_ptr = menu.menu_content as *const c_void;
                 if !content_ptr.is_null() {
                     let content = &*(content_ptr as *const engage::menu::BasicMenuContent);
-                    match (root_class, content.get_class().get_name()) {
+                    match (root_class.as_str(), content.get_class().get_name().as_str()) {
                         ("MapSystemMenu", "SortieTopMenuContent") => {
                             // Preserve the tactical map chapter refresh.
                             elp_map_update_chapter_info(content_ptr, false, core::ptr::null());
