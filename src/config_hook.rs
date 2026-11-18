@@ -811,8 +811,8 @@ unsafe fn elp_refresh_hub_time(content: *const c_void) {
     skyline::println!("[ELP V10.30] HUB TIME updated={}/2", updated);
 }
 
-/// Refresh existing tactical, world-map and Somniel/Hub menu texts in the
-/// selected game's language. No new menu, selection changes, language filter,
+/// Refresh existing tactical, pre-battle, world-map and Somniel/Hub menu
+/// texts in the selected game's language. No new menu or selection changes,
 /// or reuse of cached parent pointers after Settings is closed.
 /// The item and item-content field offsets below are verified in Ghidra:
 /// BasicMenuItem.m_menuItemContent @ +0x18;
@@ -841,9 +841,10 @@ pub fn refresh_map_system_menus() {
         };
         let root_class = root_proc.get_class().get_name();
         // The three world-map modes (GMAP / GMAP_G / GMAP_E) use GmapMenu.
-        // Preserve the tactical and world-map paths; HubMenu is independent.
-        if root_class != "MapSystemMenu" && root_class != "GmapMenu"
-            && root_class != "HubMenu" {
+        // These are the four native parent menus which can open ConfigSequence.
+        // SortieTopMenu is the pre-battle preparation menu (not MapSystemMenu).
+        if root_class != "MapSystemMenu" && root_class != "SortieTopMenu"
+            && root_class != "GmapMenu" && root_class != "HubMenu" {
             skyline::println!("[ELP V10.29] SKIP unrelated root={}", root_class);
             return;
         }
@@ -910,6 +911,13 @@ pub fn refresh_map_system_menus() {
                             // Preserve the tactical map chapter refresh.
                             elp_map_update_chapter_info(content_ptr, false, core::ptr::null());
                             skyline::println!("[ELP V10.28b] CHAPTER INFO refreshed");
+                        }
+                        ("SortieTopMenu", "SortieTopMenuContent") => {
+                            // Preparation uses the same native content class,
+                            // but CreateBind passes true (hide turn/remain).
+                            // Refresh chapter, victory and defeat texts in situ.
+                            elp_map_update_chapter_info(content_ptr, true, core::ptr::null());
+                            skyline::println!("[ELP V10.31] PRE-BATTLE INFO refreshed");
                         }
                         ("GmapMenu", "GmapMenuContent") => {
                             // Native Mess.Get: works for every installed game language.
